@@ -2641,26 +2641,64 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
             <button class="modal-close" onclick="closeSettings()">&times;</button>
         </div>
         <div class="modal-body">
+            <!-- LLM Provider -->
+            <div style="margin-bottom:16px">
+                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">LLM Provider</label>
+                <div style="display:flex;gap:6px;margin-bottom:8px">
+                    <button id="provider-anthropic" onclick="selectProvider('anthropic')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">Anthropic Direct</button>
+                    <button id="provider-openrouter" onclick="selectProvider('openrouter')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">OpenRouter</button>
+                    <button id="provider-lmstudio" onclick="selectProvider('lmstudio')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">LM Studio</button>
+                </div>
+                <div id="provider-hint" style="font-size:10px;color:var(--text2);margin-bottom:8px"></div>
+            </div>
+
+            <!-- API Key -->
             <div style="margin-bottom:16px">
                 <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">API Key</label>
                 <div style="display:flex;gap:6px">
-                    <input id="api-key-input" type="password" placeholder="sk-ant-api03-..." style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:monospace;font-size:12px;outline:none" />
+                    <input id="api-key-input" type="password" placeholder="sk-ant-api03-..." style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none" />
                     <button onclick="toggleKeyVis()" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:0 10px;color:var(--text2);cursor:pointer;font-size:13px">&#128065;</button>
                 </div>
                 <div id="api-key-status" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>
-                <button onclick="saveApiKey()" style="width:100%;margin-top:8px;padding:8px;background:linear-gradient(135deg,var(--blue),var(--blue2));border:none;border-radius:8px;color:#0a0e14;font-weight:700;font-size:12px;cursor:pointer">Save API Key</button>
             </div>
-            <div style="padding-top:14px;border-top:1px solid var(--border)">
-                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">GitHub Token</label>
-                <div style="display:flex;gap:6px">
+
+            <!-- Model -->
+            <div style="margin-bottom:16px">
+                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">Model</label>
+                <select id="model-select" onchange="onModelChange()" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;outline:none;cursor:pointer">
+                    <optgroup label="Cheap (good for goals)">
+                        <option value="claude-haiku-4-5-20251001">Haiku 4.5 (~$0.001/turn)</option>
+                    </optgroup>
+                    <optgroup label="Balanced">
+                        <option value="claude-sonnet-4-20250514">Sonnet 4 (~$0.01/turn)</option>
+                    </optgroup>
+                    <optgroup label="Best (expensive)">
+                        <option value="claude-opus-4-20250514">Opus 4 (~$0.05/turn)</option>
+                    </optgroup>
+                </select>
+                <div id="model-status" style="margin-top:4px;font-size:10px;color:var(--text2)"></div>
+            </div>
+
+            <!-- Save + Test -->
+            <div style="display:flex;gap:8px;margin-bottom:16px">
+                <button onclick="saveApiKey()" style="flex:2;padding:8px;background:linear-gradient(135deg,var(--blue),var(--blue2));border:none;border-radius:8px;color:#0a0e14;font-weight:700;font-size:12px;cursor:pointer">Save</button>
+                <button onclick="testConnection()" id="test-conn-btn" style="flex:1;padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-weight:600;font-size:12px;cursor:pointer">Test</button>
+            </div>
+
+            <!-- GitHub Token (collapsed) -->
+            <details style="padding-top:14px;border-top:1px solid var(--border)">
+                <summary style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;font-weight:600;cursor:pointer;margin-bottom:6px">GitHub Token</summary>
+                <div style="display:flex;gap:6px;margin-top:6px">
                     <input id="gh-token-input" type="password" placeholder="ghp_..." style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:monospace;font-size:12px;outline:none" />
                     <button onclick="saveGHToken()" style="background:linear-gradient(135deg,var(--purple),var(--blue));border:none;border-radius:8px;padding:0 14px;color:#fff;font-weight:700;font-size:11px;cursor:pointer">Save</button>
                 </div>
                 <div id="gh-token-status" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>
-            </div>
-            <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:8px;font-weight:600">Fleet Sync</label>
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px">
+            </details>
+
+            <!-- Fleet Sync (collapsed) -->
+            <details style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+                <summary style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;font-weight:600;cursor:pointer;margin-bottom:6px">Fleet Sync</summary>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-top:6px">
                     <div><div style="font-size:12px;font-weight:600">Auto-share learnings</div><div style="font-size:10px;color:var(--text2)">Share with fleet peers</div></div>
                     <label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer">
                         <input type="checkbox" id="fed-toggle" onchange="toggleFederated()" style="opacity:0;width:0;height:0">
@@ -2669,7 +2707,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
                     </label>
                 </div>
                 <div id="fed-reciprocity" style="font-size:10px;padding:6px 8px;margin-top:6px;background:var(--bg);border-radius:6px;border:1px solid var(--border)"></div>
-            </div>
+            </details>
         </div>
     </div>
 </div>
@@ -4290,6 +4328,74 @@ function openSettings() {
 }
 function closeSettings() { document.getElementById('settings-modal').classList.remove('active'); }
 function toggleKeyVis() { const inp = document.getElementById('api-key-input'); inp.type = inp.type === 'password' ? 'text' : 'password'; }
+
+let _selectedProvider = 'anthropic';
+const _providerHints = {
+    anthropic: 'Direct Anthropic API. Get key from console.anthropic.com. Cheapest per-token.',
+    openrouter: 'OpenRouter proxy. Get key from openrouter.ai. Lets you monitor spend.',
+    lmstudio: 'Local LM Studio. Free, no API key needed. Set URL in env: SCULPT_LMSTUDIO_BASE_URL'
+};
+const _providerPlaceholders = {
+    anthropic: 'sk-ant-api03-...',
+    openrouter: 'sk-or-v1-...',
+    lmstudio: 'not needed (leave empty)'
+};
+const _orModels = {
+    'anthropic/claude-3.5-haiku': 'Haiku 3.5 via OR (~$0.001/turn)',
+    'anthropic/claude-sonnet-4': 'Sonnet 4 via OR (~$0.01/turn)',
+    'anthropic/claude-opus-4': 'Opus 4 via OR (~$0.05/turn)'
+};
+function selectProvider(name) {
+    _selectedProvider = name;
+    ['anthropic','openrouter','lmstudio'].forEach(p => {
+        const btn = document.getElementById('provider-' + p);
+        if (btn) btn.style.borderColor = p === name ? 'var(--purple)' : 'var(--border)';
+    });
+    document.getElementById('provider-hint').textContent = _providerHints[name] || '';
+    document.getElementById('api-key-input').placeholder = _providerPlaceholders[name] || 'API key...';
+    // Update model dropdown for OpenRouter
+    const sel = document.getElementById('model-select');
+    if (name === 'openrouter') {
+        sel.innerHTML = '';
+        Object.entries(_orModels).forEach(([v,l]) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); });
+    } else if (name === 'lmstudio') {
+        sel.innerHTML = '<option value="local">Local model (auto-detect)</option>';
+    } else {
+        sel.innerHTML = '<optgroup label="Cheap"><option value="claude-haiku-4-5-20251001">Haiku 4.5 (~$0.001/turn)</option></optgroup>' +
+            '<optgroup label="Balanced"><option value="claude-sonnet-4-20250514">Sonnet 4 (~$0.01/turn)</option></optgroup>' +
+            '<optgroup label="Best"><option value="claude-opus-4-20250514">Opus 4 (~$0.05/turn)</option></optgroup>';
+    }
+}
+function onModelChange() {
+    const model = document.getElementById('model-select').value;
+    document.getElementById('model-status').textContent = 'Model: ' + model;
+}
+async function testConnection() {
+    const btn = document.getElementById('test-conn-btn');
+    btn.textContent = 'Testing...';
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/os/command', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({command: 'ping'})
+        });
+        const data = await resp.json();
+        if (data.response && !data.response.includes('error') && !data.response.includes('No LLM')) {
+            btn.textContent = 'Connected!';
+            btn.style.borderColor = 'var(--green)';
+            btn.style.color = 'var(--green)';
+        } else {
+            btn.textContent = 'Failed';
+            btn.style.borderColor = 'var(--red)';
+            btn.style.color = 'var(--red)';
+        }
+    } catch(e) {
+        btn.textContent = 'Error';
+        btn.style.borderColor = 'var(--red)';
+    }
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = 'Test'; btn.style.borderColor = ''; btn.style.color = ''; }, 3000);
+}
 function updateToggleUI(on) {
     const slider = document.getElementById('fed-slider');
     const dot = document.getElementById('fed-dot');

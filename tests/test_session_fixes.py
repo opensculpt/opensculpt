@@ -231,11 +231,11 @@ class TestDynamicToolSelection:
 class TestPreFlightGates:
     """Test that doomed phases are skipped before wasting tokens."""
 
-    def test_preflight_code_exists(self):
+    def test_planner_gets_environment(self):
+        """Planner receives environment info so it plans correctly (no hardcoded gates)."""
         source = Path("agos/daemons/goal_runner.py").read_text(encoding="utf-8")
-        assert "PRE-FLIGHT" in source
-        assert "docker_available" in source
         assert "EnvironmentProbe" in source
+        assert "env_summary" in source
 
     def test_universal_verify_guidance(self):
         """Planning prompt must mandate universal tools for verification."""
@@ -544,15 +544,17 @@ class TestDaemonRename:
 class TestAutoFactExtraction:
     """Test CrewAI-style fact extraction after phases."""
 
-    def test_extracts_files_created(self):
+    def test_extracts_successful_actions(self):
+        """Skill extraction records all successful tool actions (no keyword filtering)."""
         source = Path("agos/daemons/goal_runner.py").read_text(encoding="utf-8")
         assert "write_file" in source
-        assert "Created file:" in source
+        assert "Created:" in source
 
-    def test_extracts_services(self):
+    def test_extracts_all_tools(self):
+        """Skill extraction records shell, http, write_file actions."""
         source = Path("agos/daemons/goal_runner.py").read_text(encoding="utf-8")
-        assert "running on port" in source
-        assert "Service:" in source
+        assert "Command:" in source
+        assert "API:" in source
 
 
 # ═══════════════════════════════════════════════════════════════════
