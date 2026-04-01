@@ -1,0 +1,27 @@
+services:
+  opensculpt:
+    build: .
+    container_name: opensculpt
+    ports:
+      - "8420:8420"
+    environment:
+      - SCULPT_LLM_API_KEY=${SCULPT_LLM_API_KEY:-}
+      - SCULPT_GITHUB_TOKEN=${SCULPT_GITHUB_TOKEN:-}
+      - SCULPT_AUTO_SHARE_EVERY=${SCULPT_AUTO_SHARE_EVERY:-0}
+      - SCULPT_DASHBOARD_HOST=0.0.0.0
+      - SCULPT_DASHBOARD_PORT=8420
+      - SCULPT_APPROVAL_MODE=auto
+      - SCULPT_LOG_LEVEL=INFO
+      # Local LLM fallback
+      - SCULPT_LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist evolution state, evolved code, and knowledge across restarts
+      - opensculpt-data:/app/.opensculpt
+      # Docker socket — so the OS can manage containers (install CRMs, databases, etc.)
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  opensculpt-data:

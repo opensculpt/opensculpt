@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+*.spec.bak
+
+# agos workspace (user-specific data)
+.agos/
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env
+
+# Build artifacts
+*.exe
+
+# Coverage
+htmlcov/
+.coverage
+
+# Linting cache
+.ruff_cache/
+
+# Claude Code settings (may contain API keys in permissions)
+.claude/
+
+# MCP config (contains local paths)
+.mcp.json
+
+# Runtime data (user-specific, regenerated on boot)
+.opensculpt/
+.opensculpt-fleet/
+
+# Runtime reports
+reports/
+
+# Screenshots
+*.png
+
+# Temp files
+temp_*.md
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Website build (separate repo or generated)
+website/

@@ -1,0 +1,46 @@
+name: Evolution
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday at 6am UTC
+  workflow_dispatch:       # Manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install agos
+        run: pip install -e .
+
+      - name: Run evolution pipeline
+        id: evolve
+        env:
+          SCULPT_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python -m agos.evolution.pipeline --output proposals/
+
+      - name: Create PR if proposals exist
+        if: steps.evolve.outputs.has_proposals == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="evolution/$(date +%Y%m%d)"
+          git config user.name "agos-evolution[bot]"
+          git config user.email "evolution@agos.dev"
+          git checkout -b "$BRANCH"
+          git add proposals/
+          git commit -m "evolution: weekly R&D proposals $(date +%Y-%m-%d)"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "Evolution: $(date +%Y-%m-%d) research proposals" \
+            --body-file proposals/SUMMARY.md \
+            --label evolution
