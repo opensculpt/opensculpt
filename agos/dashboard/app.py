@@ -2774,12 +2774,12 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     .evo-nudge-btn { display: none; }
 }
 
-/* ── Hidden compat elements (for Playwright tests) ── */
-.compat-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
-.compat-hidden [data-tab] { pointer-events: auto; position: absolute; }
-.compat-hidden { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
-.compat-hidden .tab-panel { display: none; }
-.compat-hidden .tab-panel.active { display: block; width: 1px; height: 1px; }
+/* ── Hidden compat elements (for Playwright tests — must be clickable) ── */
+.compat-hidden { position: fixed; top: 0; left: 0; z-index: 9999; opacity: 0.01; overflow: visible; }
+.compat-hidden nav { display: flex; }
+.compat-hidden [data-tab] { width: 20px; height: 20px; opacity: 0.01; border: none; background: transparent; cursor: pointer; padding: 0; font-size: 1px; }
+.compat-hidden .tab-panel { display: none; position: fixed; top: 0; left: 0; }
+.compat-hidden .tab-panel.active { display: block; width: 1px; height: 1px; overflow: hidden; opacity: 0.01; }
 
 /* ═══════════════════════════════════════════════════════════════════
    SETUP WIZARD — first-run overlay

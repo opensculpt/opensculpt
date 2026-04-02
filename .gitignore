@@ -16,6 +16,8 @@ build/
 # IDE
 .vscode/
 .idea/
+.cursor/
+.windsurf/
 *.swp
 *.swo
 
@@ -58,6 +60,16 @@ temp_*.md
 
 # Playwright MCP logs
 .playwright-mcp/
+
+# Dev artifacts / scratch files
+serve_err*.log
+_logo_b64.txt
+article.html
+base.html
+create.html
+index.html
+search.html
+0
 
 # Website build (separate repo or generated)
 website/
