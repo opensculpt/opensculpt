@@ -96,6 +96,9 @@ class Environment:
     can_run_services: bool = False
     can_build_from_source: bool = False
 
+    # Vibe coding tools (detected by agos.vibe_tools)
+    vibe_tools: list[dict] = field(default_factory=list)  # [{"name": "claude_code", "label": "Claude Code", ...}]
+
     # Deployment recommendation
     recommended_strategy: str = ""  # "docker", "apt_install", "pip_python", "minimal"
 
@@ -314,6 +317,13 @@ class EnvironmentProbe:
         except Exception:
             pass
 
+        # ── Vibe coding tools ──
+        try:
+            from agos.vibe_tools import detect_vibe_tools
+            env.vibe_tools = [t.to_dict() for t in detect_vibe_tools()]
+        except Exception:
+            _logger.debug("Vibe tool detection failed", exc_info=True)
+
         # ── Deployment strategy recommendation ──
         if env.docker_available:
             env.recommended_strategy = "docker"
@@ -433,6 +443,14 @@ class EnvironmentProbe:
             lines.append(f"DISK: {env.disk_free_gb} GB free")
         if env.memory_total_mb:
             lines.append(f"MEMORY: {env.memory_free_mb}/{env.memory_total_mb} MB available")
+
+        # Vibe coding tools
+        installed_vibe = [t for t in env.vibe_tools if t.get("installed")]
+        if installed_vibe:
+            vibe_names = [t["label"] for t in installed_vibe]
+            lines.append("VIBE CODING TOOLS: " + ", ".join(vibe_names))
+        else:
+            lines.append("VIBE CODING TOOLS: None detected")
 
         # Deployment recommendation
         strategies = {

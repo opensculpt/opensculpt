@@ -306,8 +306,7 @@ async def get_settings() -> dict:
         "active_provider": active_provider,
         "has_github_token": has_gh,
         "github_token_preview": settings.github_token[:8] + "..." if has_gh else "",
-        "auto_share_every": settings.auto_share_every,
-        "is_contributor": bool(settings.github_token and settings.auto_share_every > 0),
+        "sharing_model": "git-prs",
     }
 
 
@@ -386,15 +385,8 @@ async def set_github_token(payload: GitHubTokenPayload) -> dict:
 
 @dashboard_app.post("/api/settings/federated")
 async def set_federated(payload: FederatedTogglePayload) -> dict:
-    if payload.enabled:
-        settings.auto_share_every = max(1, payload.interval)
-    else:
-        settings.auto_share_every = 0
-    return {
-        "ok": True,
-        "auto_share_every": settings.auto_share_every,
-        "is_contributor": bool(settings.github_token and settings.auto_share_every > 0),
-    }
+    # Auto-share removed — users share via git PRs
+    return {"ok": True, "sharing_model": "git-prs"}
 
 
 class ProviderPayload(BaseModel):
@@ -2004,9 +1996,8 @@ async def share_evolution(payload: SharePayload) -> dict:
     if not token:
         return {"ok": False, "error": "GitHub token required — set in Settings or SCULPT_GITHUB_TOKEN env var"}
     try:
-        from agos.evolution.contribute import share_learnings
-        contribution = _evolution_state.export_contribution()
-        result = await share_learnings(contribution, token)
+        from agos.evolution.contribute import share_knowledge
+        result = await share_knowledge(token)
         return {"ok": True, "pr_url": result["pr_url"], "branch": result["branch"]}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
@@ -2589,9 +2580,9 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .skeleton { background: linear-gradient(90deg, var(--bg3) 25%, rgba(255,255,255,0.04) 50%, var(--bg3) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease infinite; border-radius: 6px; height: 120px; }
 
 /* ── Top Bar (like macOS menu bar) ── */
-.topbar { height: 32px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; backdrop-filter: blur(20px); -webkit-app-region: drag; z-index: 100; position: relative; }
+.topbar { height: 40px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; backdrop-filter: blur(20px); -webkit-app-region: drag; z-index: 100; position: relative; }
 .topbar-left { display: flex; align-items: center; gap: 12px; }
-.topbar-brand { font-size: 13px; font-weight: 700; background: linear-gradient(135deg, var(--accent2), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.3px; }
+.topbar-brand { font-size: 18px; font-weight: 800; background: linear-gradient(135deg, var(--accent2), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px; text-transform: uppercase; }
 .topbar-right { display: flex; align-items: center; gap: 14px; font-size: 11px; color: var(--text2); font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace; }
 .topbar-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .topbar-btn { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; transition: all 0.15s; }
@@ -3236,7 +3227,7 @@ let _learnedData = [];
 let _chatHistory = [];
 let _collapsedGoals = new Set();  // tracks which goal cards have phases collapsed
 let _expandedResources = new Set();  // tracks which resource sections are expanded
-let lastSharePR = '';
+// auto-share removed — users share via git PRs
 
 /* ── Helpers ── */
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -4422,7 +4413,7 @@ try {
         else if (t === 'hand.goal_runner.goal_completed' || t === 'daemon.goal_runner.goal_completed' || t === 'goal_completed') {
             showToast('Goal complete: ' + (d.description||'').slice(0,50), 'success');
         }
-        else if (t === 'evolution.auto_share_success' && d.pr_url) lastSharePR = d.pr_url;
+        // auto-share events removed
         // Auto-refresh on goal events
         if (t.startsWith('hand.goal_runner.')) refreshDesktop();
         // Activity feed — push events to the feed card
@@ -4788,12 +4779,7 @@ function openSettings() {
         if (s.has_github_token) {
             ghStatus.innerHTML = '<span style="color:var(--green)">&#10003; Configured:</span> <code style="color:var(--cyan)">' + esc(s.github_token_preview) + '</code>';
         }
-        // Fleet sync
-        const toggle = document.getElementById('fed-toggle');
-        const isOn = s.auto_share_every > 0;
-        toggle.checked = isOn;
-        updateToggleUI(isOn);
-        updateReciprocityInfo(s.is_contributor);
+        // Sharing model: git PRs (auto-share removed)
     });
 }
 function closeSettings() { document.getElementById('settings-modal').classList.remove('active'); }
@@ -4891,12 +4877,7 @@ function updateToggleUI(on) {
     if (on) { slider.style.background = 'var(--purple)'; dot.style.transform = 'translateX(18px)'; }
     else { slider.style.background = 'var(--border)'; dot.style.transform = 'translateX(0)'; }
 }
-function updateReciprocityInfo(isContributor) {
-    const el = document.getElementById('fed-reciprocity');
-    if (!el) return;
-    if (isContributor) el.innerHTML = '<span style="color:var(--green)">&#10003; Contributor</span> \u2014 sharing with fleet.';
-    else el.innerHTML = '<span style="color:var(--yellow)">&#x26A0; Observer only</span> \u2014 enable sharing.';
-}
+// reciprocity removed — all users get community code equally
 async function saveApiKey() {
     const provider = document.getElementById('provider-select').value;
     const key = document.getElementById('api-key-input').value.trim();
@@ -4938,13 +4919,7 @@ async function saveGHToken() {
         document.getElementById('gh-token-input').value = '';
     }
 }
-async function toggleFederated() {
-    const on = document.getElementById('fed-toggle').checked;
-    updateToggleUI(on);
-    const resp = await fetch('/api/settings/federated', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({enabled: on, interval: 3}) });
-    const data = await resp.json();
-    if (data.ok) updateReciprocityInfo(data.is_contributor);
-}
+// auto-share toggle removed — sharing is via git PRs
 
 /* ═══════════════════════════════════════════════════════════════════
    SETUP WIZARD — first-run auto-detection + configuration

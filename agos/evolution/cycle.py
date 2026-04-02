@@ -43,73 +43,6 @@ from agos.evolution.heuristics import (
 _logger = logging.getLogger(__name__)
 
 
-async def _maybe_auto_share(
-    evolution_state: EvolutionState, aid: str, name: str,
-    bus: EventBus, audit: AuditTrail,
-) -> None:
-    """Share evolved code with the fleet.
-
-    Primary: peer-to-peer sync (fast, no GitHub dependency, scales to 1000s of nodes).
-    Fallback: GitHub PRs (for cross-org sharing, permanent record, nodes without peer access).
-
-    Peer sync happens in the background via sync_loop — this function handles
-    the GitHub PR path which runs on a cycle interval.
-    """
-    # Fleet sync handles real-time sharing — peer sync loop runs independently.
-    # GitHub PRs are the fallback for cross-org / public contributions.
-    share_every = _settings.auto_share_every
-    token = _settings.github_token
-    if not (share_every > 0 and token
-            and evolution_state.data.cycles_completed % share_every == 0):
-        return
-
-    # Skip PR if fleet sync is handling it (avoid duplicate sharing)
-    if _settings.fleet_sync_enabled and _settings.fleet_sync_push:
-        await bus.emit("evolution.auto_share_skipped", {
-            "cycle": evolution_state.data.cycles_completed,
-            "reason": "fleet sync active — PR not needed",
-        }, source=name)
-        return
-
-    contribution = evolution_state.export_contribution()
-    new_hashes = contribution.get("_new_file_hashes", {})
-
-    if not contribution.get("evolved_code"):
-        await bus.emit("evolution.auto_share_skipped", {
-            "cycle": evolution_state.data.cycles_completed,
-            "reason": "no new evolved files",
-        }, source=name)
-        return
-
-    await bus.emit("evolution.auto_share_start", {
-        "cycle": evolution_state.data.cycles_completed,
-        "new_files": len(new_hashes),
-        "method": "github_pr",
-    }, source=name)
-    try:
-        from agos.evolution.contribute import share_learnings
-        result = await share_learnings(contribution, token)
-
-        if new_hashes:
-            evolution_state.mark_shared(list(new_hashes.values()))
-
-        await bus.emit("evolution.auto_share_success", {
-            "pr_url": result["pr_url"],
-            "branch": result["branch"],
-            "cycle": evolution_state.data.cycles_completed,
-        }, source=name)
-        await audit.record(AuditEntry(
-            agent_id=aid, agent_name=name, action="community_share",
-            detail=f"PR created: {result['pr_url']}", success=True,
-        ))
-    except Exception as e:
-        await bus.emit("evolution.auto_share_failed", {
-            "error": str(e)[:200],
-            "cycle": evolution_state.data.cycles_completed,
-        }, source=name)
-        _logger.warning("Auto-share failed: %s", e)
-
-
 async def _maybe_alma_iterate(
     cycle_num: int, bus: EventBus, audit: AuditTrail,
     design_archive: DesignArchive | None, llm_provider,
@@ -385,7 +318,7 @@ async def run_evolution_cycle(cycle_num: int, bus: EventBus, audit: AuditTrail, 
         if evolution_state is not None:
             evolution_state.increment_cycle()
             evolution_state.save(loom)
-            await _maybe_auto_share(evolution_state, aid, name, bus, audit)
+            pass  # auto-share removed — users share via git PRs
         await bus.emit("evolution.cycle_completed", {"papers": 0}, source=name)
         await audit.log_state_change(aid, name, "running", "completed")
         return
@@ -430,7 +363,7 @@ async def run_evolution_cycle(cycle_num: int, bus: EventBus, audit: AuditTrail, 
         if evolution_state is not None:
             evolution_state.increment_cycle()
             evolution_state.save(loom)
-            await _maybe_auto_share(evolution_state, aid, name, bus, audit)
+            pass  # auto-share removed — users share via git PRs
         await bus.emit("evolution.cycle_completed", {"papers": len(papers), "new": 0}, source=name)
         await audit.log_state_change(aid, name, "running", "completed")
         return
@@ -525,7 +458,7 @@ async def run_evolution_cycle(cycle_num: int, bus: EventBus, audit: AuditTrail, 
         if evolution_state is not None:
             evolution_state.increment_cycle()
             evolution_state.save(loom)
-            await _maybe_auto_share(evolution_state, aid, name, bus, audit)
+            pass  # auto-share removed — users share via git PRs
         await bus.emit("evolution.cycle_completed", {"papers": len(papers), "insights": 0}, source=name)
         await audit.log_state_change(aid, name, "running", "completed")
         return
@@ -857,9 +790,6 @@ async def run_evolution_cycle(cycle_num: int, bus: EventBus, audit: AuditTrail, 
             "strategies": len(evolution_state.data.strategies_applied),
             "patterns": len(evolution_state.data.discovered_patterns),
         }, source=name)
-
-        # ── Auto-share to upstream (federated learning) ──
-        await _maybe_auto_share(evolution_state, aid, name, bus, audit)
 
     # ── Phase 4.5: ALMA iterate-on-strategy (every Nth cycle) ──
     await _maybe_alma_iterate(
@@ -1235,11 +1165,7 @@ async def evolution_loop(bus: EventBus, audit: AuditTrail, loom,
                 _logger.debug("Scoring update error: %s", e)
 
         # ── Auto-share evolved artifacts with fleet ──
-        if evolution_state is not None:
-            try:
-                await _maybe_auto_share(evolution_state, "evo", "EvolutionEngine", bus, audit)
-            except Exception:
-                pass
+        pass  # auto-share removed — users share via git PRs
 
         # Persist demand signals across restarts
         if evolution_state is not None:

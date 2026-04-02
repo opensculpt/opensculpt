@@ -35,7 +35,8 @@ def _run_wizard():
         "This wizard will help you configure the basics:\n"
         "  1. Connect an LLM provider\n"
         "  2. Set up notification channels\n"
-        "  3. Verify everything works",
+        "  3. Detect vibe coding tools\n"
+        "  4. Verify everything works",
         title="[bold cyan]sculpt setup[/bold cyan]",
         border_style="cyan",
     ))
@@ -104,7 +105,7 @@ def _run_wizard():
             console.print("  [dim]Skipped — configure later with: agos provider configure[/dim]")
 
     # Step 2: Channels
-    console.print("\n[bold blue]Step 2/3: Notification Channels[/bold blue]")
+    console.print("\n[bold blue]Step 2/4: Notification Channels[/bold blue]")
     console.print("[dim]How should OpenSculpt notify you?[/dim]\n")
 
     channel_options = {
@@ -132,8 +133,56 @@ def _run_wizard():
         })
         console.print(f"  [green]Saved[/green] {label}")
 
-    # Step 3: Summary
-    console.print("\n[bold blue]Step 3/3: Summary[/bold blue]\n")
+    # Step 3: Vibe coding tools
+    console.print("\n[bold blue]Step 3/4: Vibe Coding Tools[/bold blue]")
+    console.print("[dim]Scanning for AI coding tools (Claude Code, Cursor, Aider, Copilot, etc.)...[/dim]\n")
+
+    from agos.vibe_tools import detect_vibe_tools
+    vibe_tools = detect_vibe_tools(use_cache=False)
+    installed_vibe = [t for t in vibe_tools if t.installed]
+
+    if installed_vibe:
+        console.print(f"[green]Found {len(installed_vibe)} tool(s):[/green]\n")
+        for i, t in enumerate(installed_vibe, 1):
+            version_str = f" ({t.version})" if t.version else ""
+            cat_str = {"cli": "CLI", "ide": "IDE", "extension": "VS Code ext"}.get(t.category, t.category)
+            console.print(f"  {i}. [bold]{t.label}[/bold] [{cat_str}]{version_str}")
+            if t.path:
+                console.print(f"     [dim]{t.path}[/dim]")
+
+        # Auto-save detected tools
+        from agos.setup_store import set_vibe_tool_config
+        for t in installed_vibe:
+            set_vibe_tool_config(settings.workspace_dir, t.name, {
+                "enabled": True, "label": t.label, "path": t.path,
+                "category": t.category, "auto_detected": True,
+            })
+
+        # Ask for preferred tool
+        if len(installed_vibe) > 1:
+            console.print("\n[bold]Which tool should OpenSculpt use by default for evolution nudges?[/bold]")
+            for i, t in enumerate(installed_vibe, 1):
+                console.print(f"  {i}. {t.label}")
+            pref = typer.prompt("Select default", default="1")
+            try:
+                idx = int(pref) - 1
+                if 0 <= idx < len(installed_vibe):
+                    from agos.setup_store import set_preferred_vibe_tool
+                    set_preferred_vibe_tool(settings.workspace_dir, installed_vibe[idx].name)
+                    console.print(f"  [green]Default:[/green] {installed_vibe[idx].label}")
+            except (ValueError, IndexError):
+                pass
+        elif len(installed_vibe) == 1:
+            from agos.setup_store import set_preferred_vibe_tool
+            set_preferred_vibe_tool(settings.workspace_dir, installed_vibe[0].name)
+            console.print(f"  [green]Default:[/green] {installed_vibe[0].label}")
+    else:
+        console.print("[yellow]No AI coding tools detected.[/yellow]")
+        console.print("[dim]Install one of: Claude Code, Cursor, Aider, Windsurf, GitHub Copilot[/dim]")
+        console.print("[dim]The OS will re-scan when you run 'sculpt setup' again.[/dim]")
+
+    # Step 4: Summary
+    console.print("\n[bold blue]Step 4/4: Summary[/bold blue]\n")
 
     from agos.setup_store import load_setup
     setup = load_setup(settings.workspace_dir)
@@ -149,6 +198,10 @@ def _run_wizard():
         summary += f"  [green]Channels:[/green] {', '.join(channels_on)}\n"
     else:
         summary += "  [dim]Channels:[/dim] none (add later)\n"
+    if installed_vibe:
+        summary += f"  [green]Vibe Tools:[/green] {', '.join(t.label for t in installed_vibe)}\n"
+    else:
+        summary += "  [dim]Vibe Tools:[/dim] none detected\n"
     summary += "\n  [dim]Change settings anytime:[/dim]\n"
     summary += "    agos provider list / configure / test\n"
     summary += "    agos channel list / configure / test\n"

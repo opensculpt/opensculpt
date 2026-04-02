@@ -69,7 +69,7 @@ class SyncManifest:
         self.cycles_completed = cycles_completed
         self.memory_size = memory_size
         self.archive_size = archive_size
-        self.evolved_file_hashes = evolved_file_hashes or {}
+        self.evolved_file_hashes = evolved_file_hashes or {}  # kept for backward compat with older peers
         self.timestamp = timestamp or time.time()
 
         self.constraints_count: int = 0
@@ -124,43 +124,13 @@ def build_local_manifest(
     """Build a manifest from local evolution state, including efficacy data."""
     data = evolution_state.data
 
-    # Hash evolved files on disk
-    file_hashes: dict[str, str] = {}
-    evolved_dir = Path(".agos/evolved")
-    if evolved_dir.exists():
-        for py_file in evolved_dir.glob("*.py"):
-            if not py_file.name.startswith("_"):
-                try:
-                    content = py_file.read_text(encoding="utf-8")
-                    file_hashes[py_file.name] = EvolutionState._file_content_hash(content)
-                except Exception:
-                    pass
-
+    # No evolved file hashes — code stays local, only knowledge syncs
     manifest = SyncManifest(
         instance_id=data.instance_id,
         cycles_completed=data.cycles_completed,
         memory_size=len(data.evolution_memory.get("insights", [])) if data.evolution_memory else 0,
         archive_size=len(data.design_archive.get("entries", [])) if data.design_archive else 0,
-        evolved_file_hashes=file_hashes,
     )
-
-    # Efficacy data: resolved demands
-    if demand_collector is not None:
-        try:
-            all_demands = demand_collector.top_demands(limit=200, include_all=True)
-            manifest.resolved_demands = [
-                d.key for d in all_demands if d.status == "resolved"
-            ]
-            manifest.tools_deployed = list(file_hashes.keys())
-        except Exception:
-            pass
-
-    # Artifact scores
-    if local_scorer is not None:
-        try:
-            manifest.artifact_scores = local_scorer.to_dict()
-        except Exception:
-            pass
 
     # Environment tags — tells peers what kind of constraints we need
     try:
@@ -191,33 +161,8 @@ def build_sync_payload(
     if data.design_archive and data.design_archive.get("entries"):
         payload["design_archive_entries"] = data.design_archive["entries"]
 
-    # Evolved code files the remote doesn't have (by hash)
-    remote_hashes = set(remote_manifest.evolved_file_hashes.values())
-    new_files: dict[str, str] = {}
-    evolved_dir = Path(".agos/evolved")
-    if evolved_dir.exists():
-        for py_file in evolved_dir.glob("*.py"):
-            if py_file.name.startswith("_"):
-                continue
-            try:
-                content = py_file.read_text(encoding="utf-8")
-                h = EvolutionState._file_content_hash(content)
-                if h not in remote_hashes:
-                    new_files[py_file.name] = content
-            except Exception:
-                pass
-    payload["evolved_files"] = new_files
-
-    # Share artifact scores for cross-fleet scoring
-    try:
-        scores_path = Path(settings.workspace_dir) / "artifact_scores.json"
-        if scores_path.exists():
-            import json
-            payload["artifact_scores"] = json.loads(scores_path.read_text(encoding="utf-8"))
-        else:
-            payload["artifact_scores"] = {}
-    except Exception:
-        payload["artifact_scores"] = {}
+    # Code stays local — only knowledge syncs via P2P.
+    # Users share code via git PRs (standard open source workflow).
 
     # Share tagged knowledge files — only send tags matching REMOTE environment
     remote_tags = set(remote_manifest.environment_tags or ["general"])
@@ -302,6 +247,18 @@ async def pull_from_peer(
             _logger.debug("Sync pull error from %s: %s", peer_url, e)
             return result
 
+    # Security: reject unsigned payloads (C3 fix)
+    if "signature" not in payload:
+        _logger.warning(
+            "Rejecting unsigned sync payload from %s. "
+            "Peer must upgrade to support payload signing.", peer_url
+        )
+        await bus.emit("sync.unsigned_payload_rejected", {
+            "peer": peer_url,
+            "instance_id": payload.get("instance_id", ""),
+        }, source="fleet_sync")
+        return result
+
     # Step 3: Merge evolution memory
     remote_memory = payload.get("evolution_memory")
     if remote_memory and evo_memory is not None:
@@ -311,45 +268,8 @@ async def pull_from_peer(
         )
         result["merged_memory"] = merged
 
-    # Step 4: Merge evolved code files (with sandbox validation + score-based conflict resolution)
-    new_files = payload.get("evolved_files", {})
-    remote_scores = payload.get("artifact_scores", {})
-    if new_files:
-        from agos.evolution.sandbox import Sandbox
-        sandbox = Sandbox(timeout=10)
-        evolved_dir = Path(".agos/evolved")
-        evolved_dir.mkdir(parents=True, exist_ok=True)
-
-        for filename, code in new_files.items():
-            target = evolved_dir / filename
-
-            if target.exists():
-                # Score-based conflict resolution: higher composite wins
-                remote_score = 0.0
-                if filename in remote_scores:
-                    rs = remote_scores[filename]
-                    remote_score = rs.get("composite", 0.0) if isinstance(rs, dict) else float(rs)
-
-                local_score = 0.0  # Default: keep local (first-write-wins fallback)
-                # If we have a local scorer passed in, use it; otherwise keep local
-                if remote_score <= local_score:
-                    continue  # keep local version
-                _logger.info("Sync: %s from %s has higher score (%.2f > %.2f), replacing",
-                             filename, peer_url, remote_score, local_score)
-
-            # Sandbox validate before accepting
-            validation = sandbox.validate(code)
-            if not validation.safe:
-                _logger.debug("Sync: rejected %s from %s (static analysis)", filename, peer_url)
-                continue
-
-            exec_result = await sandbox.execute(code)
-            if not exec_result.passed:
-                _logger.debug("Sync: rejected %s from %s (sandbox)", filename, peer_url)
-                continue
-
-            target.write_text(code, encoding="utf-8")
-            result["merged_files"] += 1
+    # Code no longer syncs P2P — users share via git PRs.
+    # Ignore evolved_files from older peers silently.
 
     # Step 5: Merge design archive entries
     remote_entries = payload.get("design_archive_entries", [])
@@ -474,9 +394,18 @@ async def sync_loop(
     if not settings.fleet_sync_enabled:
         return
 
-    peers = [p.strip() for p in settings.fleet_sync_peers.split(",") if p.strip()]
+    raw_peers = [p.strip() for p in settings.fleet_sync_peers.split(",") if p.strip()]
+
+    # H3: Reject non-HTTPS peer URLs (plain HTTP exposes API keys and payloads)
+    peers = []
+    for p in raw_peers:
+        if p.startswith("https://") or p.startswith("http://127.0.0.1") or p.startswith("http://localhost"):
+            peers.append(p)
+        else:
+            _logger.warning("Rejecting non-HTTPS peer URL: %s (use HTTPS or localhost)", p)
+
     if not peers:
-        _logger.info("Fleet sync enabled but no peers configured")
+        _logger.info("Fleet sync enabled but no valid peers configured")
         return
 
     await asyncio.sleep(30)  # Let boot complete

@@ -212,31 +212,59 @@ class DemandSolver:
         # chain so the LLM sees the PATTERN of failures, not just the latest one.
         chain_section = f"\n{failure_chain}" if failure_chain else ""
 
+        # Load evolution patterns skill (research-backed decision framework)
+        skill_context = ""
+        try:
+            patterns_path = Path(".opensculpt/skills/evolution_patterns.md")
+            if patterns_path.exists():
+                skill_context = patterns_path.read_text(encoding="utf-8")[:800]
+        except Exception:
+            pass
+
+        # Classify failure type (from evolution_patterns.md research)
+        failure_type = self._classify_failure(demand)
+
         system_msg = (
             "You are a self-healing engine. You output ONLY valid JSON with double quotes. "
-            "No markdown, no explanation, no code blocks. Just one JSON object."
+            "No markdown, no explanation, no code blocks. Just one JSON object.\n\n"
+            "CONSENT TIERS — choose the right level:\n"
+            "- autonomous: skill docs, prompt tweaks (low impact, just do it)\n"
+            "- notify: new tools, behavioral changes (medium impact, log it)\n"
+            "- approve: code patches to core modules (high impact, show plan first)\n"
+            "- tell_user: environmental issues, architecture problems (needs human)\n"
         )
 
         prompt = (
             f"Problem: {demand.kind} from {demand.source}\n"
             f"Detail: {clean_desc}\n"
-            f"Occurred {demand.count}x, priority {demand.priority:.1f}\n\n"
+            f"Occurred {demand.count}x, priority {demand.priority:.1f}\n"
+            f"Failure type: {failure_type}\n\n"
             f"Environment: {env[:300]}\n"
             f"{past_section}{research_section}{chain_section}\n\n"
+        )
+
+        if skill_context:
+            prompt += f"EVOLUTION PATTERNS (follow these):\n{skill_context}\n\n"
+
+        prompt += (
             "Pick ONE action and return JSON:\n\n"
-            '1. create_skill_doc — write a how-to for future agents:\n'
+            '1. create_skill_doc — write a how-to for future agents (autonomous):\n'
             '   {"action":"create_skill_doc","topic":"NAME","content":"markdown how-to text"}\n\n'
-            '2. create_tool — Python function to fix a missing capability:\n'
+            '2. create_tool — Python function to fix a missing capability (notify):\n'
             '   {"action":"create_tool","name":"TOOL","code":"async def handler(x): ...","description":"what it does"}\n\n'
-            '3. patch_source — fix a bug in existing OS code (auto-tested, auto-rollback):\n'
+            '3. patch_source — fix a bug in existing OS code, auto-tested + auto-rollback (approve):\n'
             '   {"action":"patch_source","file":"agos/path/to/file.py","description":"what to fix"}\n'
             '   Use when the problem is a code bug (crash, missing retry, wrong logic).\n\n'
-            '4. tell_user — only if you cannot fix it:\n'
+            '4. tell_user — environmental issues or things you cannot fix:\n'
             '   {"action":"tell_user","message":"what you need from the user"}\n\n'
-            '5. clear — demand is stale:\n'
+            '5. clear — demand is stale or transient:\n'
             '   {"action":"clear","reason":"why"}\n\n'
-            "Choose the action that actually fixes the problem. "
-            "If docs/tools haven't worked after 2+ attempts, try patch_source. "
+            "RULES:\n"
+            "- Transient failures (timeout, rate limit) → clear with reason\n"
+            "- Environmental (missing software, wrong OS) → tell_user\n"
+            "- Code bugs → patch_source\n"
+            "- Missing capability → create_tool\n"
+            "- If docs/tools haven't worked after 2+ attempts, try patch_source.\n"
             "Output ONLY the JSON object."
         )
 
@@ -320,14 +348,9 @@ class DemandSolver:
         elif action_type == "patch_source":
             return await self._handle_patch_source(demand, action, source_patcher)
 
-        # ── ACTION: tell_user ──
+        # ── ACTION: tell_user — refresh context + nudge user with tool-specific instructions ──
         elif action_type == "tell_user":
-            await self._bus.emit("evolution.user_action_needed", {
-                "message": action.get("message", ""),
-                "demand": demand.description[:60],
-            }, source="demand_solver")
-            _logger.info("DemandSolver: telling user -- %s", action.get("message", "")[:60])
-            return "told_user"
+            return await self._try_vibe_tool(demand, env)
 
         # ── ACTION: clear ──
         elif action_type == "clear":
@@ -509,6 +532,86 @@ class DemandSolver:
             "topic": topic, "size": len(content),
         }, source="demand_solver")
         return "principle"  # counts as a principle for reporting
+
+    @staticmethod
+    def _classify_failure(demand: DemandSignal) -> str:
+        """Classify failure type to guide the LLM's action choice.
+
+        From evolution_patterns.md research:
+        - transient: network timeout, rate limit → clear/retry
+        - environmental: Docker not installed, port in use → tell_user
+        - bug: crash, wrong output → patch_source
+        - capability_gap: need browser, need PDF → create_tool
+        - architecture: wrong approach → tell_user with context
+        """
+        desc = demand.description.lower()
+        kind = demand.kind
+
+        # Transient
+        if any(w in desc for w in ("timeout", "rate limit", "429", "503", "connection reset", "retry")):
+            return "transient"
+
+        # Environmental
+        if any(w in desc for w in ("not installed", "not found", "not available", "no docker",
+                                    "command not found", "permission denied", "port in use")):
+            return "environmental"
+
+        # Capability gap
+        if kind == "missing_tool" or "missing" in desc or "no tool" in desc:
+            return "capability_gap"
+
+        # Agent crash
+        if kind == "agent_crash" or "oom" in desc or "killed" in desc:
+            return "bug"
+
+        # Code bug (default for errors)
+        if kind == "error":
+            return "bug"
+
+        return "unknown"
+
+    async def _try_vibe_tool(self, demand: DemandSignal, env: str) -> str:
+        """Prepare context for user's vibe coding tool and emit enriched escalation.
+
+        Does NOT invoke any tool. Refreshes DEMANDS.md so context is ready,
+        looks up the user's preferred tool, and emits a richer event so the
+        dashboard/CLI can show tool-specific instructions.
+        """
+        # 1. Refresh DEMANDS.md + IDE rule files
+        try:
+            from agos.evolution.nudge import write_demands_md, write_tool_configs
+            write_demands_md()
+            write_tool_configs()
+        except Exception:
+            pass
+
+        # 2. Look up preferred vibe tool
+        tool_name = ""
+        how_to_use = "Run: sculpt demands --prompt"
+        try:
+            from agos.setup_store import get_preferred_vibe_tool
+            from agos.vibe_tools import get_tool_by_name
+            from agos.config import settings
+            pref = get_preferred_vibe_tool(Path(settings.workspace_dir))
+            if pref:
+                tool = get_tool_by_name(pref)
+                if tool:
+                    tool_name = tool.label
+                    how_to_use = tool.how_to_use
+        except Exception:
+            pass
+
+        # 3. Emit enriched event — dashboard + CLI pick this up
+        await self._bus.emit("evolution.user_action_needed", {
+            "message": demand.description,
+            "demand": demand.description[:60],
+            "tool": tool_name,
+            "how_to_use": how_to_use,
+        }, source="demand_solver")
+
+        _logger.info("DemandSolver: escalating to user (tool=%s) — %s",
+                     tool_name or "none", demand.description[:60])
+        return "told_user"
 
     async def _research(self, demand: DemandSignal) -> str:
         """Search web for solutions. Cached per demand key."""

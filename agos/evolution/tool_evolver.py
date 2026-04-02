@@ -494,7 +494,29 @@ async def handler(param1: str, param2: str = "") -> str:
     # ── 4. DEPLOY — hot-load into running system ─────────────
 
     async def deploy_tool(self, code: str, need: ToolNeed) -> bool:
-        """Write the tool file and hot-load it into the registry."""
+        """Write the tool file and hot-load it into the registry.
+
+        Applies linting gate (SWE-agent pattern) before writing:
+        1. ast.parse() — reject syntax errors
+        2. Dangerous import check — reject os.system, eval, exec
+        """
+        # ── Linting gate: reject broken code before writing to disk ──
+        try:
+            import ast
+            ast.parse(code)
+        except SyntaxError as e:
+            _logger.warning("Linting gate REJECTED %s: syntax error at line %s: %s",
+                            need.name, e.lineno, e.msg)
+            return False
+
+        # Check for dangerous patterns
+        _dangerous = {"os.system", "subprocess.call(", "eval(", "exec(", "__import__"}
+        for pattern in _dangerous:
+            if pattern in code:
+                _logger.warning("Linting gate REJECTED %s: dangerous pattern '%s'",
+                                need.name, pattern)
+                return False
+
         file_path = EVOLVED_TOOLS_DIR / f"{need.name}.py"
 
         # Don't overwrite if unchanged

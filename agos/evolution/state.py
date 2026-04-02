@@ -977,30 +977,12 @@ class EvolutionState:
     # ── Export for community contribution ────────────────────────
 
     def export_contribution(self, evolved_dir: Path | None = None) -> dict:
-        """Export state as a community contribution dict.
+        """Export aggregate stats for dashboard display.
 
-        Only includes evolved files not already shared in a previous PR.
-        Filters out strategies from irrelevant papers (physics, bio, etc.).
+        No raw code, no file contents, no private data.
+        For sharing code, users open PRs from their fork (standard git).
+        For sharing knowledge, use curator.export_contribution() which anonymizes.
         """
-        # Collect evolved .py files from disk — skip already-shared
-        evolved_files: dict[str, str] = {}
-        new_file_hashes: dict[str, str] = {}  # filename -> hash
-        shared = set(self._data.shared_file_hashes)
-        d = evolved_dir or Path(".agos/evolved")
-        if d.exists():
-            for py_file in sorted(d.glob("*.py")):
-                if py_file.name.startswith("_"):
-                    continue
-                try:
-                    content = py_file.read_text(encoding="utf-8")
-                    content_hash = self._file_content_hash(content)
-                    if content_hash not in shared:
-                        evolved_files[py_file.name] = content
-                        new_file_hashes[py_file.name] = content_hash
-                except Exception:
-                    pass
-
-        # Filter strategies — reject entries from irrelevant papers
         clean_strategies = [
             s for s in self._data.strategies_applied
             if _is_relevant_strategy(s.name)
@@ -1012,17 +994,7 @@ class EvolutionState:
             "contributed_at": datetime.utcnow().isoformat(),
             "cycles_completed": self._data.cycles_completed,
             "strategies_applied": [
-                s.model_dump() for s in clean_strategies
+                {"name": s.name, "module": s.module} for s in clean_strategies
             ],
-            "discovered_patterns": [
-                p.model_dump() for p in self._data.discovered_patterns
-            ],
-            "meta_evolution": self._data.meta_evolution,
             "meta_cycles_completed": self._data.meta_cycles_completed,
-            "evolved_code": evolved_files,
-            "_new_file_hashes": new_file_hashes,
-            "design_archive": self._data.design_archive,
-            # HyperAgents: share cross-cycle learnings across fleet
-            "evolution_memory": self._data.evolution_memory,
-            "performance_tracker": self._data.performance_tracker,
         }

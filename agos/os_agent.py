@@ -175,10 +175,10 @@ class OSAgent:
             api_key = provider_cfg.get("api_key", "")
             if api_key and provider_name == "anthropic":
                 from agos.llm.anthropic import AnthropicProvider
-                self._cheap_llm = AnthropicProvider(api_key=api_key, model="claude-haiku-4-5-20251001")
+                self._cheap_llm = AnthropicProvider(api_key=api_key, model="anthropic/claude-3.5-haiku")
             elif api_key and provider_name == "openrouter":
                 from agos.llm.providers import OpenRouterProvider
-                self._cheap_llm = OpenRouterProvider(api_key=api_key, model="anthropic/claude-haiku-4-5-20251001")
+                self._cheap_llm = OpenRouterProvider(api_key=api_key, model="anthropic/claude-3.5-haiku")
         except Exception:
             pass  # No cheap LLM available — use main model
         # Propagate to DaemonManager so DomainDaemons can reason

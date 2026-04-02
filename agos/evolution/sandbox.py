@@ -19,25 +19,36 @@ from pydantic import BaseModel, Field
 
 from agos.types import new_id
 
-# Modules that are NEVER allowed in sandbox
+# Modules that are NEVER allowed in sandbox.
+# SECURITY: These can execute arbitrary commands, access the filesystem
+# destructively, or exfiltrate data over the network.
 BLOCKED_IMPORTS = {
     "ctypes",
     "signal",
     "importlib",  # no dynamic code loading
     "multiprocessing", "threading",  # no spawning threads/processes
+    "subprocess",  # arbitrary command execution
+    "os",  # os.system, os.popen, file manipulation
+    "shutil",  # destructive file operations (rmtree, move)
+    "socket",  # raw network access
+    "http",  # network access
+    "urllib",  # network access
+    "requests",  # network access (third-party)
+    "sys",  # sys.exit, sys.modules manipulation
 }
 
-# Safe modules that evolved tools commonly need
+# Safe modules that evolved tools commonly need.
+# SECURITY: subprocess, os, shutil, socket are BLOCKED for community/evolved code.
+# Evolved tools that need shell/network access must use the OS agent's tool system,
+# not raw imports. This prevents community code from running arbitrary commands.
 ALLOWED_IMPORTS = {
     "json", "re", "math", "random", "datetime", "time",
     "collections", "itertools", "functools", "typing",
     "dataclasses", "enum", "abc", "copy", "hashlib",
     "uuid", "textwrap", "string", "operator",
     "asyncio",  # needed for async patterns
-    "subprocess",  # tools need to run docker, curl, etc.
-    "os", "pathlib", "shutil",  # tools need filesystem access
-    "socket", "http", "urllib",  # tools need network access
-    "sys",  # tools need sys.stdout etc.
+    "pathlib",  # read-only path manipulation (no exec)
+    "logging",  # tools need logging
 }
 
 DEFAULT_TIMEOUT = 10  # seconds
@@ -120,7 +131,7 @@ class Sandbox:
             elif isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name):
-                    if func.id in ("exec", "eval", "compile", "__import__"):
+                    if func.id in ("exec", "eval", "compile", "__import__", "open"):
                         validation.safe = False
                         validation.issues.append(f"Blocked builtin: {func.id}()")
                     elif func.id == "getattr":

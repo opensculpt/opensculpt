@@ -96,3 +96,32 @@ def set_tool_config(workspace_dir: Path | str, name: str, config: dict[str, Any]
     data = load_setup(workspace_dir)
     data.setdefault("tools", {})[name] = config
     save_setup(workspace_dir, data)
+
+
+# ── Vibe coding tool helpers ────────────────────────────────
+
+
+def get_vibe_tools_config(workspace_dir: Path | str) -> dict[str, Any]:
+    """Get configured vibe coding tools. Keys are tool names, values are config dicts."""
+    data = load_setup(workspace_dir)
+    return data.get("vibe_tools", {})
+
+
+def set_vibe_tool_config(workspace_dir: Path | str, name: str, config: dict[str, Any]) -> None:
+    """Enable/disable/configure a specific vibe coding tool."""
+    data = load_setup(workspace_dir)
+    data.setdefault("vibe_tools", {})[name] = config
+    save_setup(workspace_dir, data)
+
+
+def get_preferred_vibe_tool(workspace_dir: Path | str) -> str | None:
+    """Return the name of the preferred (default) vibe coding tool, or None."""
+    data = load_setup(workspace_dir)
+    return data.get("preferred_vibe_tool")
+
+
+def set_preferred_vibe_tool(workspace_dir: Path | str, name: str) -> None:
+    """Set the preferred vibe coding tool for nudge prompts."""
+    data = load_setup(workspace_dir)
+    data["preferred_vibe_tool"] = name
+    save_setup(workspace_dir, data)

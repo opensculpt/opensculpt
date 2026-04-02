@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 
 class AgosSettings(BaseSettings):
     llm_api_key: str = ""  # Provider-agnostic: works with any provider (Anthropic, OpenAI, etc.)
-    default_model: str = "claude-haiku-4-5-20251001"
+    default_model: str = "anthropic/claude-3.5-haiku"
 
     @property
     def anthropic_api_key(self) -> str:
@@ -59,7 +59,6 @@ class AgosSettings(BaseSettings):
     github_owner: str = "opensculpt"
     github_repo: str = "opensculpt"
     github_token: str = ""  # GitHub PAT for community contributions (optional)
-    auto_share_every: int = 0  # Auto-share via PR disabled by default (evolution writes code locally instead)
 
     # Fleet sync (peer-to-peer evolution sharing — replaces GitHub PRs at scale)
     fleet_sync_enabled: bool = False  # Enable peer-to-peer evolution sync

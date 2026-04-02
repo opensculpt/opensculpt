@@ -19,14 +19,16 @@ from agos import __version__
 PYPI_URL = "https://pypi.org/pypi/agos/json"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
+# Hardcoded: updates ONLY come from the official repo. No env var override.
+UPSTREAM_OWNER = "opensculpt"
+UPSTREAM_REPO = "opensculpt"
 
-async def check_for_update(
-    github_owner: str = "opensculpt",
-    github_repo: str = "opensculpt",
-) -> dict[str, Any]:
+
+async def check_for_update() -> dict[str, Any]:
     """Check if a newer version is available.
 
     Checks PyPI first, then falls back to GitHub Releases.
+    Update source is hardcoded to opensculpt/opensculpt — not configurable.
     Returns dict with current_version, latest_version, update_available,
     source, and download_url.
     """
@@ -57,7 +59,7 @@ async def check_for_update(
 
         # Fallback: check GitHub releases
         try:
-            url = GITHUB_RELEASES_URL.format(owner=github_owner, repo=github_repo)
+            url = GITHUB_RELEASES_URL.format(owner=UPSTREAM_OWNER, repo=UPSTREAM_REPO)
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()

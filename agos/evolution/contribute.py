@@ -23,31 +23,49 @@ from agos.config import settings
 
 GITHUB_API = "https://api.github.com"
 
+# Hardcoded: ALL instances worldwide share learnings to the same central repo.
+# This is intentional — community contributions must converge to one place.
+UPSTREAM_OWNER = "opensculpt"
+UPSTREAM_REPO = "opensculpt"
+
 
 class ContributionError(Exception):
     """Failed to create a community contribution."""
 
 
-async def share_learnings(
-    contribution: dict,
+async def share_knowledge(
     github_token: str,
-    upstream_owner: str | None = None,
-    upstream_repo: str | None = None,
 ) -> dict:
-    """Create a GitHub PR with this instance's evolution learnings + code.
+    """Share anonymized knowledge patterns via GitHub PR.
 
-    The PR contains:
-      1. Metadata JSON (strategies applied, fitness scores, archive)
-      2. Evolved .py files that passed sandbox validation
+    The PR targets opensculpt/opensculpt — hardcoded.
+
+    Shares ONLY anonymized knowledge (constraints, resolutions, demand
+    categories) — NO code, NO paths, NO private data. Uses the curator's
+    existing anonymization pipeline.
+
+    For sharing CODE, users open PRs from their fork (standard git workflow).
 
     Returns {"pr_url": "...", "branch": "...", "files_committed": N}.
     Raises ContributionError on failure.
     """
-    owner = upstream_owner or settings.github_owner
-    repo = upstream_repo or settings.github_repo
-    instance_id = contribution.get("instance_id", "unknown")[:12]
+    import hashlib
+    from pathlib import Path
+
+    owner = UPSTREAM_OWNER
+    repo = UPSTREAM_REPO
+
+    # Generate anonymized knowledge via curator
+    from agos.evolution.curator import export_contribution as curator_export
+    contrib_dir = curator_export()
+
+    # Anonymized instance ID
+    from agos.evolution.state import EvolutionState
+    state = EvolutionState()
+    state.load()
+    anon_id = hashlib.sha256(state.data.instance_id.encode()).hexdigest()[:12]
     timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    branch_name = f"contrib/{instance_id}/{timestamp}"
+    branch_name = f"knowledge/{anon_id}/{timestamp}"
 
     headers = {
         "Authorization": f"token {github_token}",
@@ -57,59 +75,34 @@ async def share_learnings(
     async with httpx.AsyncClient(
         timeout=30, headers=headers, follow_redirects=True
     ) as client:
-        # Step 1: Get authenticated user
         fork_user = await _get_authenticated_user(client)
-
-        # Step 2: Fork the repo (idempotent)
         await _ensure_fork(client, owner, repo)
-
-        # Step 3: Get default branch SHA from fork
         default_sha = await _get_default_branch_sha(client, fork_user, repo)
-
-        # Step 4: Create branch on fork
         await _create_branch(client, fork_user, repo, branch_name, default_sha)
 
-        # Step 5: Build file list for multi-file commit
-        files: list[tuple[str, str]] = []  # (path, content)
+        # Build file list from curator's anonymized output
+        files: list[tuple[str, str]] = []
+        prefix = f"community/knowledge/{anon_id}"
 
-        # 5a: Metadata JSON (strip evolved_code to avoid duplicating large content)
-        meta = {k: v for k, v in contribution.items()
-                if k != "evolved_code" and not k.startswith("_")}
-        meta_json = json.dumps(meta, indent=2)
-        files.append((
-            f"community/contributions/{instance_id}.json",
-            meta_json,
-        ))
+        if contrib_dir.exists():
+            for f in sorted(contrib_dir.rglob("*")):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(contrib_dir).as_posix()
+                content = f.read_text(encoding="utf-8")
+                files.append((f"{prefix}/{rel}", content))
 
-        # 5b: Evolved .py files
-        evolved_code = contribution.get("evolved_code", {})
-        for filename, code in evolved_code.items():
-            files.append((
-                f"community/evolved/{instance_id}/{filename}",
-                code,
-            ))
+        if not files:
+            raise ContributionError("No knowledge to share (constraints/resolutions empty)")
 
-        # Step 6: Commit all files in one tree
         await _commit_tree(
             client, fork_user, repo, branch_name, default_sha,
             files=files,
-            message=f"Add evolution learnings + {len(evolved_code)} evolved modules from {instance_id}",
+            message=f"Add anonymized knowledge patterns from {anon_id}",
         )
 
-        # Step 7: Open PR against upstream
-        n_strategies = len(contribution.get("strategies_applied", []))
-        n_cycles = contribution.get("cycles_completed", 0)
-        n_patterns = len(contribution.get("discovered_patterns", []))
-        n_evolved = len(evolved_code)
-
-        pr_title = (
-            f"[Community] {n_evolved} evolved modules, "
-            f"{n_strategies} strategies, {n_cycles} cycles"
-        )
-        pr_body = _build_pr_body(
-            instance_id, n_cycles, n_strategies, n_patterns,
-            n_evolved, contribution, evolved_code,
-        )
+        pr_title = f"[Knowledge] {len(files)} anonymized patterns from {anon_id}"
+        pr_body = _build_pr_body(anon_id, len(files))
 
         pr_url = await _create_pr(
             client, owner, repo,
@@ -126,61 +119,20 @@ async def share_learnings(
     }
 
 
-def _build_pr_body(
-    instance_id: str,
-    n_cycles: int,
-    n_strategies: int,
-    n_patterns: int,
-    n_evolved: int,
-    contribution: dict,
-    evolved_code: dict,
-) -> str:
-    """Build a markdown PR body with strategies + evolved code listing."""
-    body = (
-        f"## Community Evolution Contribution\n\n"
-        f"- **Instance:** `{instance_id}`\n"
-        f"- **Cycles completed:** {n_cycles}\n"
-        f"- **Strategies applied:** {n_strategies}\n"
-        f"- **Patterns discovered:** {n_patterns}\n"
-        f"- **Evolved code files:** {n_evolved}\n\n"
+# Keep old name as alias for backward compatibility
+share_learnings = share_knowledge
+
+def _build_pr_body(anon_id: str, n_files: int) -> str:
+    """Build PR body for anonymized knowledge contribution."""
+    return (
+        f"## Anonymized Knowledge Contribution\n\n"
+        f"- **Anonymous ID:** `{anon_id}`\n"
+        f"- **Files:** {n_files} (constraints, resolutions, demand summaries)\n\n"
+        f"This PR contains anonymized knowledge patterns learned by an OpenSculpt instance.\n"
+        f"All IPs, paths, API keys, and identifiable information have been stripped.\n\n"
+        f"**No code is included.** For code contributions, submit a PR from your fork.\n\n"
+        f"---\n*Auto-generated by OpenSculpt evolution engine.*\n"
     )
-
-    if contribution.get("strategies_applied"):
-        body += "### Strategies\n"
-        for s in contribution["strategies_applied"]:
-            sandbox = " (sandbox-passed)" if s.get("sandbox_passed") else ""
-            body += (
-                f"- **{s['name']}** (module: `{s['module']}`, "
-                f"applied {s.get('applied_count', 1)}x){sandbox}\n"
-            )
-        body += "\n"
-
-    if evolved_code:
-        body += "### Evolved Code\n"
-        body += "These files passed sandbox validation and are ready to use:\n\n"
-        body += "| File | Path |\n|------|------|\n"
-        for filename in sorted(evolved_code.keys()):
-            body += (
-                f"| `{filename}` | "
-                f"`community/evolved/{instance_id}/{filename}` |\n"
-            )
-        body += "\n"
-
-    archive = contribution.get("design_archive", {})
-    if archive.get("entries"):
-        body += f"### Design Archive ({len(archive['entries'])} designs)\n"
-        for e in archive["entries"][:5]:
-            body += (
-                f"- **{e['strategy_name']}** "
-                f"(module: `{e['module']}`, fitness: {e['current_fitness']:.2f}, "
-                f"gen: {e['generation']})\n"
-            )
-        if len(archive["entries"]) > 5:
-            body += f"- ... and {len(archive['entries']) - 5} more\n"
-        body += "\n"
-
-    body += "---\n*Auto-generated by AGenticOS evolution engine.*\n"
-    return body
 
 
 # ── GitHub API helpers ───────────────────────────────────────────
