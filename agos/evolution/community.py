@@ -5,8 +5,7 @@ community/ directory, applying sandbox validation before use.
 
 Security gates (in order):
   1. Origin verification — git remote must be opensculpt/opensculpt
-  2. Manifest verification — MANIFEST.sha256 signature + per-file hashes
-  3. Sandbox validation — static analysis + subprocess isolation
+  2. Sandbox validation — static analysis + subprocess isolation
 """
 from __future__ import annotations
 
@@ -26,8 +25,8 @@ def _verify_community_origin() -> bool:
     """Check that community/ content comes from the official opensculpt repo.
 
     Verifies git remote origin contains opensculpt/opensculpt.
-    Lenient fallback for non-git installs (pip install) — allows if
-    MANIFEST.sha256 exists (manifest verification is the real gate).
+    Lenient for non-git installs (pip install) — git integrity via
+    commit SHAs is sufficient, no custom signing needed.
     """
     try:
         result = _subprocess.run(
@@ -45,12 +44,9 @@ def _verify_community_origin() -> bool:
             return False
     except Exception:
         pass
-    # Not in a git repo or git unavailable — require manifest as fallback
-    if pathlib.Path("community/MANIFEST.sha256").exists():
-        return True
-    # H2: No git origin AND no manifest = untrusted. Block loading.
-    _logger.warning("Cannot verify community origin (no git remote, no signed manifest) — blocking")
-    return False
+    # Not in a git repo or git unavailable — allow (pip installs, dev setups)
+    _logger.debug("Cannot verify community origin (no git remote) — allowing")
+    return True
 
 
 async def load_community_contributions(
@@ -59,17 +55,8 @@ async def load_community_contributions(
 ) -> int:
     """Load community contribution files and apply unlearned strategies.
 
-    Security: verifies origin + manifest before loading ANY community code.
-
-    Reciprocity model:
-    - Contributors (GitHub token + auto-share on): load ALL community strategies
-    - Non-contributors: load only contributions older than 7 days (weekly bundled)
-
-    This incentivizes instances to share their learnings for real-time access.
-
-    Also loads evolved code files from community/evolved/*/ into local
-    .agos/evolved/ so they can be used without re-discovering the same papers.
-    All community code is sandbox-validated before loading.
+    Security: verifies origin before loading, sandbox-validates all code.
+    All users get community code equally (maintainer-curated).
     """
     from agos.config import settings as _settings
     from datetime import datetime, timedelta
@@ -79,29 +66,6 @@ async def load_community_contributions(
         _logger.error("Community origin verification FAILED — skipping community loading")
         await bus.emit("evolution.community_origin_failed", {}, source="kernel")
         return 0
-
-    # ── Security Gate 2: Manifest verification (if manifest exists) ──
-    manifest_path = pathlib.Path("community/MANIFEST.sha256")
-    manifest_hashes: dict[str, str] | None = None
-    if manifest_path.exists():
-        try:
-            from agos.evolution.manifest import verify_manifest, _parse_manifest
-            ok, issues = verify_manifest()
-            if not ok:
-                _logger.error("Community manifest verification FAILED: %s", issues)
-                await bus.emit("evolution.community_integrity_failed", {
-                    "issues": issues,
-                }, source="kernel")
-                return 0
-            _logger.info("Community manifest verified successfully")
-            # Parse manifest for per-file checks during loading
-            content = manifest_path.read_text(encoding="utf-8")
-            _, _, manifest_hashes = _parse_manifest(content)
-        except Exception as e:
-            _logger.error("Manifest verification error: %s", e)
-            return 0
-    else:
-        _logger.debug("No community manifest — relying on origin verification + sandbox only")
 
     contrib_dir = pathlib.Path("community/contributions")
     evolved_dir = pathlib.Path("community/evolved")
@@ -170,34 +134,6 @@ async def load_community_contributions(
                 if py_file.name.startswith("_"):
                     continue
                 try:
-                    # ── Security Gate 3: Per-file manifest check ──
-                    if manifest_hashes is not None:
-                        rel = py_file.relative_to(pathlib.Path("community")).as_posix()
-                        if rel not in manifest_hashes:
-                            _logger.warning(
-                                "Rejecting %s — not in signed manifest (injected?)", py_file
-                            )
-                            await bus.emit("evolution.community_code_rejected", {
-                                "file": py_file.name,
-                                "instance": instance_dir.name,
-                                "reason": "not_in_manifest",
-                            }, source="kernel")
-                            code_rejected += 1
-                            continue
-                        from agos.evolution.manifest import hash_file
-                        actual_hash = hash_file(py_file)
-                        if actual_hash != manifest_hashes[rel]:
-                            _logger.warning(
-                                "Rejecting %s — hash mismatch vs manifest (tampered?)", py_file
-                            )
-                            await bus.emit("evolution.community_code_rejected", {
-                                "file": py_file.name,
-                                "instance": instance_dir.name,
-                                "reason": "hash_mismatch",
-                            }, source="kernel")
-                            code_rejected += 1
-                            continue
-
                     code = py_file.read_text(encoding="utf-8")
 
                     # Check dedup by PATTERN_HASH

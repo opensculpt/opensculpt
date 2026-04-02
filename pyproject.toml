@@ -19,7 +19,6 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "websockets>=13.0",
     "mcp>=1.0.0",
-    "cryptography>=42.0.0",
 ]
 
 [project.urls]
