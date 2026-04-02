@@ -12,7 +12,7 @@ import pathlib
 import subprocess
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -34,8 +34,9 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if request.url.path in _AUTH_SKIP_PATHS:
             return await call_next(request)
+        import hmac as _hmac
         provided = request.headers.get("x-api-key", "")
-        if provided != api_key:
+        if not _hmac.compare_digest(provided, api_key):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
@@ -187,6 +188,31 @@ async def index() -> HTMLResponse:
     return HTMLResponse(_DASHBOARD_HTML)
 
 
+@dashboard_app.get("/logo.jpg")
+async def logo():
+    """Serve the OpenSculpt logo."""
+    from pathlib import Path
+    # Try multiple locations
+    for p in [Path(__file__).parent / "static" / "logo.jpg",
+              Path("agos/dashboard/static/logo.jpg"),
+              Path("OpenSculpt_icon.jpg")]:
+        if p.exists():
+            return FileResponse(p, media_type="image/jpeg")
+    return JSONResponse({"error": "logo not found"}, status_code=404)
+
+
+@dashboard_app.get("/favicon.ico")
+async def favicon():
+    """Serve logo as favicon."""
+    from pathlib import Path
+    for p in [Path(__file__).parent / "static" / "logo.jpg",
+              Path("agos/dashboard/static/logo.jpg"),
+              Path("OpenSculpt_icon.jpg")]:
+        if p.exists():
+            return FileResponse(p, media_type="image/jpeg")
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+
 @dashboard_app.get("/api/agents")
 async def list_agents() -> list[dict]:
     if _runtime is None:
@@ -230,6 +256,10 @@ async def system_status() -> dict:
         "uptime_s": int(time.time() - _start_time),
         "session_requests": getattr(_os_agent, "_session_requests", 0) if _os_agent else 0,
         "session_tokens": getattr(_os_agent, "_session_tokens", 0) if _os_agent else 0,
+        "session_cost_usd": round(getattr(_os_agent, "_session_cost_usd", 0.0), 4) if _os_agent else 0,
+        "session_input_tokens": getattr(_os_agent, "_session_input_tokens", 0) if _os_agent else 0,
+        "session_output_tokens": getattr(_os_agent, "_session_output_tokens", 0) if _os_agent else 0,
+        "lifetime_cost": getattr(_os_agent, "_lifetime_cost", {}) if _os_agent else {},
         "conversation_memory": len(getattr(_os_agent, "_conversation_history", [])) if _os_agent else 0,
         "compactor_stats": getattr(_os_agent, "_compactor", None) and _os_agent._compactor.stats or {},
         "demand_signals": _demand_collector.pending_count() if _demand_collector else 0,
@@ -241,7 +271,10 @@ async def system_status() -> dict:
 # ── Settings: API Key ────────────────────────────────────────────
 
 class ApiKeyPayload(BaseModel):
-    api_key: str
+    api_key: str = ""
+    provider: str = "anthropic"
+    model: str = ""
+    base_url: str = ""
 
 
 class GitHubTokenPayload(BaseModel):
@@ -257,10 +290,20 @@ class FederatedTogglePayload(BaseModel):
 async def get_settings() -> dict:
     has_key = bool(settings.anthropic_api_key)
     has_gh = bool(settings.github_token)
+    # Detect active provider from setup.json
+    active_provider = "anthropic"
+    try:
+        from agos.setup_store import load_setup
+        import pathlib
+        data = load_setup(pathlib.Path(settings.workspace_dir))
+        active_provider = data.get("active_provider", "anthropic")
+    except Exception:
+        pass
     return {
         "has_api_key": has_key,
         "api_key_preview": settings.anthropic_api_key[:8] + "..." if has_key else "",
         "model": settings.default_model,
+        "active_provider": active_provider,
         "has_github_token": has_gh,
         "github_token_preview": settings.github_token[:8] + "..." if has_gh else "",
         "auto_share_every": settings.auto_share_every,
@@ -271,27 +314,65 @@ async def get_settings() -> dict:
 @dashboard_app.post("/api/settings/apikey")
 async def set_api_key(payload: ApiKeyPayload) -> dict:
     key = payload.api_key.strip()
-    if not key:
+    provider_name = payload.provider or "anthropic"
+    model = payload.model or settings.default_model
+
+    if not key and provider_name != "lmstudio":
         return {"ok": False, "error": "API key cannot be empty"}
-    settings.anthropic_api_key = key
-    # Wire LLM into OS agent — Anthropic always takes priority over local models
+
+    base_url = payload.base_url.strip() if payload.base_url else ""
+
+    # Wire LLM provider into OS agent
     if _os_agent is not None:
-        from agos.llm.anthropic import AnthropicProvider
-        provider = AnthropicProvider(api_key=key, model=settings.default_model)
-        provider.name = "anthropic"  # Mark as cloud provider
-        _os_agent.set_llm(provider)
-    # Save to setup.json so it persists + mark as active provider
+        try:
+            from agos.llm.anthropic import AnthropicProvider
+            # Local providers don't need a real key
+            actual_key = key or "local"
+            if provider_name in ("lmstudio", "ollama"):
+                base_url = base_url or ("http://host.docker.internal:1234/v1" if provider_name == "lmstudio"
+                                        else "http://host.docker.internal:11434/v1")
+            elif provider_name == "anthropic":
+                base_url = ""  # Use default Anthropic endpoint
+            elif not base_url:
+                # Use provider-specific base URLs from the JS metadata
+                _base_urls = {
+                    "openrouter": "https://openrouter.ai/api/v1",
+                    "openai": "https://api.openai.com/v1",
+                    "mistral": "https://api.mistral.ai/v1",
+                    "groq": "https://api.groq.com/openai/v1",
+                    "together": "https://api.together.xyz/v1",
+                    "fireworks": "https://api.fireworks.ai/inference/v1",
+                    "deepseek": "https://api.deepseek.com/v1",
+                    "perplexity": "https://api.perplexity.ai",
+                    "cohere": "https://api.cohere.com/v2",
+                }
+                base_url = _base_urls.get(provider_name, "")
+
+            if base_url:
+                provider = AnthropicProvider(api_key=actual_key, model=model, base_url=base_url)
+            else:
+                provider = AnthropicProvider(api_key=actual_key, model=model)
+            provider.name = provider_name
+            _os_agent.set_llm(provider)
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to configure provider: {e}"}
+
+    settings.anthropic_api_key = key
+    if model:
+        settings.default_model = model
+
+    # Save to setup.json
     try:
         from agos.setup_store import load_setup, save_setup
         import pathlib
         ws = pathlib.Path(settings.workspace_dir)
         data = load_setup(ws)
-        data.setdefault("providers", {})["anthropic"] = {"enabled": True, "api_key": key}
-        data["active_provider"] = "anthropic"
+        data.setdefault("providers", {})[provider_name] = {"enabled": True, "api_key": key, "model": model}
+        data["active_provider"] = provider_name
         save_setup(ws, data)
     except Exception:
         pass
-    return {"ok": True, "preview": key[:8] + "..."}
+    return {"ok": True, "preview": key[:8] + "..." if key else "local", "provider": provider_name, "model": model}
 
 
 @dashboard_app.post("/api/settings/github-token")
@@ -460,19 +541,19 @@ async def evolution_nudge() -> dict:
     except Exception:
         pass
 
+    # Build tools list from detected vibe tools (not hardcoded)
+    from agos.vibe_tools import get_installed_tools
+    detected = get_installed_tools()
+    tools_list = [{"name": t.label, "command": t.how_to_use} for t in detected]
+    # Always include generic fallback
+    tools_list.append({"name": "Any tool", "command": "Copy the prompt below and paste into any AI coding tool."})
+
     return {
         "active": active,
         "escalated": escalated,
         "total": total,
         "prompt": prompt,
-        "tools": [
-            {"name": "Claude Code", "command": "Open Claude Code in this repo. Paste the prompt below."},
-            {"name": "Cursor", "command": "Open Cursor. Press Cmd+L. Paste the prompt below."},
-            {"name": "GitHub Copilot", "command": "Open VS Code with Copilot. Use @workspace with the prompt."},
-            {"name": "OpenAI Codex", "command": "Run: codex 'Fix OpenSculpt demands' in this directory."},
-            {"name": "Aider", "command": "Run: aider --read .opensculpt/DEMANDS.md"},
-            {"name": "Any tool", "command": "Copy the prompt below and paste into any AI coding tool."},
-        ],
+        "tools": tools_list,
     }
 
 
@@ -491,6 +572,48 @@ async def federation_constraints() -> dict:
         }
     except Exception:
         return {"content": "# No constraints learned yet\n", "count": 0}
+
+
+# ── Vibe coding tools ─────────────────────────────────────────────
+
+
+@dashboard_app.get("/api/vibe-tools")
+async def vibe_tools_endpoint() -> dict:
+    """Detected vibe coding tools on this machine."""
+    from agos.vibe_tools import detect_vibe_tools
+    all_tools = detect_vibe_tools()
+    installed = [t for t in all_tools if t.installed]
+    return {
+        "installed": [t.to_dict() for t in installed],
+        "all": [t.to_dict() for t in all_tools],
+        "count": len(installed),
+        "total": len(all_tools),
+    }
+
+
+@dashboard_app.post("/api/vibe-tools/rescan")
+async def vibe_tools_rescan() -> dict:
+    """Force re-scan for vibe coding tools."""
+    from agos.vibe_tools import detect_vibe_tools, reset_cache
+    reset_cache()
+    all_tools = detect_vibe_tools(use_cache=False)
+    installed = [t for t in all_tools if t.installed]
+    return {
+        "installed": [t.to_dict() for t in installed],
+        "count": len(installed),
+    }
+
+
+@dashboard_app.post("/api/vibe-tools/preferred")
+async def set_preferred_vibe_tool_endpoint(body: dict) -> dict:
+    """Set the preferred vibe coding tool."""
+    from agos.config import settings
+    from agos.setup_store import set_preferred_vibe_tool
+    name = body.get("name", "")
+    if not name:
+        return {"error": "name required"}
+    set_preferred_vibe_tool(settings.workspace_dir, name)
+    return {"ok": True, "preferred": name}
 
 
 # ── Demand-driven evolution ──────────────────────────────────────
@@ -820,6 +943,135 @@ async def wizard_detect() -> dict:
                 pass
 
     return {"detected": detected}
+
+
+@dashboard_app.get("/api/wizard/detect-all")
+async def wizard_detect_all() -> dict:
+    """One-shot detection of everything: LLM providers, vibe tools, environment."""
+    import httpx
+
+    # 1. LLM providers (env vars + local servers)
+    providers: list[dict] = []
+    env_providers = [
+        ("openai", "OPENAI_API_KEY", "OpenAI"),
+        ("anthropic", "ANTHROPIC_API_KEY", "Anthropic"),
+        ("groq", "GROQ_API_KEY", "Groq"),
+        ("together", "TOGETHER_API_KEY", "Together AI"),
+        ("deepseek", "DEEPSEEK_API_KEY", "DeepSeek"),
+        ("openrouter", "OPENROUTER_API_KEY", "OpenRouter"),
+        ("gemini", "GOOGLE_API_KEY", "Google Gemini"),
+        ("xai", "XAI_API_KEY", "xAI / Grok"),
+        ("mistral", "MISTRAL_API_KEY", "Mistral"),
+        ("cohere", "COHERE_API_KEY", "Cohere"),
+    ]
+    for name, env_key, label in env_providers:
+        val = os.environ.get(env_key, "") or os.environ.get(f"SCULPT_{env_key}", "")
+        if val:
+            providers.append({
+                "name": name, "label": label, "type": "cloud",
+                "key_preview": val[:6] + "...", "env_var": env_key,
+            })
+    if settings.anthropic_api_key and not any(d["name"] == "anthropic" for d in providers):
+        key = settings.anthropic_api_key
+        providers.append({
+            "name": "anthropic", "label": "Anthropic (config)", "type": "cloud",
+            "key_preview": key[:6] + "...",
+        })
+    # Claude Code CLI — free, no key needed
+    try:
+        from agos.llm.claude_code import _find_claude_exe
+        if _find_claude_exe():
+            providers.append({
+                "name": "claude_code", "label": "Claude Code (free, your subscription)",
+                "type": "local", "models": [],
+            })
+    except Exception:
+        pass
+    # Local LLM servers
+    local_servers = [
+        ("ollama", "http://localhost:11434/api/tags", "Ollama"),
+        ("lmstudio", "http://localhost:1234/v1/models", "LM Studio"),
+    ]
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        for name, url, label in local_servers:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = []
+                    if name == "ollama" and "models" in data:
+                        models = [m.get("name", "") for m in data["models"][:5]]
+                    elif "data" in data:
+                        models = [m.get("id", "") for m in data["data"][:5]]
+                    providers.append({
+                        "name": name, "label": label, "type": "local", "models": models,
+                    })
+            except Exception:
+                pass
+
+    # 2. Vibe coding tools
+    from agos.vibe_tools import detect_vibe_tools
+    all_vibe = detect_vibe_tools(use_cache=False)
+    vibe_tools = [t.to_dict() for t in all_vibe]
+
+    # 3. Environment summary
+    from agos.environment import EnvironmentProbe
+    env = EnvironmentProbe.to_dict()
+    env_summary = EnvironmentProbe.summary()
+
+    return {
+        "providers": providers,
+        "vibe_tools": vibe_tools,
+        "environment": {
+            "os": env.get("os_name", ""),
+            "arch": env.get("os_arch", ""),
+            "docker": env.get("docker_available", False),
+            "internet": env.get("internet", False),
+            "memory_mb": env.get("memory_total_mb", 0),
+            "disk_gb": env.get("disk_free_gb", 0),
+            "strategy": env.get("recommended_strategy", ""),
+            "in_container": env.get("in_container", False),
+        },
+        "environment_summary": env_summary,
+    }
+
+
+@dashboard_app.post("/api/wizard/save")
+async def wizard_save(body: dict) -> dict:
+    """Save wizard selections: provider, vibe tools, preferences."""
+    ws = pathlib.Path(settings.workspace_dir)
+    from agos.setup_store import (
+        set_provider_config, set_vibe_tool_config,
+        set_preferred_vibe_tool, mark_wizard_complete,
+    )
+
+    # Save selected provider
+    provider = body.get("provider")
+    if provider:
+        cfg = {"enabled": True}
+        if provider.get("api_key"):
+            cfg["api_key"] = provider["api_key"]
+        if provider.get("base_url"):
+            cfg["base_url"] = provider["base_url"]
+        set_provider_config(ws, provider["name"], cfg)
+
+        # Set as active provider
+        from agos.setup_store import load_setup, save_setup
+        data = load_setup(ws)
+        data["active_provider"] = provider["name"]
+        save_setup(ws, data)
+
+    # Save vibe tools
+    for vt in body.get("vibe_tools", []):
+        set_vibe_tool_config(ws, vt["name"], {
+            "enabled": True, "label": vt.get("label", ""),
+            "auto_detected": True,
+        })
+    if body.get("preferred_vibe_tool"):
+        set_preferred_vibe_tool(ws, body["preferred_vibe_tool"])
+
+    mark_wizard_complete(ws)
+    return {"ok": True}
 
 
 @dashboard_app.post("/api/wizard/demo")
@@ -2294,7 +2546,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpenSculpt</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F419;</text></svg>">
+<link rel="icon" href="/favicon.ico" type="image/jpeg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2537,6 +2789,80 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .compat-hidden { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 .compat-hidden .tab-panel { display: none; }
 .compat-hidden .tab-panel.active { display: block; width: 1px; height: 1px; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   SETUP WIZARD — first-run overlay
+   ═══════════════════════════════════════════════════════════════════ */
+.wizard-overlay { position: fixed; inset: 0; background: var(--bg); z-index: 10000; display: none; align-items: center; justify-content: center; overflow-y: auto; }
+.wizard-overlay.active { display: flex; }
+.wizard-box { width: min(580px, 92vw); max-height: 90vh; overflow-y: auto; padding: 40px 36px 32px; animation: fadeIn 0.5s ease; }
+.wizard-box::-webkit-scrollbar { width: 4px; }
+.wizard-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.wizard-logo { text-align: center; margin-bottom: 28px; }
+.wizard-logo .logo-icon { font-size: 48px; margin-bottom: 8px; }
+.wizard-logo h1 { font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 800; background: linear-gradient(135deg, var(--accent2), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.wizard-logo p { color: var(--text2); font-size: 13px; margin-top: 4px; }
+
+.wizard-steps { display: flex; justify-content: center; gap: 8px; margin-bottom: 32px; }
+.wizard-step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg3); transition: all 0.3s; }
+.wizard-step-dot.active { background: var(--accent); box-shadow: 0 0 8px rgba(232,164,74,0.4); }
+.wizard-step-dot.done { background: var(--green); }
+
+.wizard-section { display: none; animation: fadeIn 0.3s ease; }
+.wizard-section.active { display: block; }
+.wizard-section h2 { font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.wizard-section .wiz-subtitle { color: var(--text2); font-size: 12px; margin-bottom: 20px; }
+.wizard-scanning { color: var(--accent); font-size: 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.wizard-scanning .spin { display: inline-block; animation: pulse 1s infinite; }
+
+.wiz-items { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
+.wiz-items::-webkit-scrollbar { width: 4px; }
+.wiz-items::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.wiz-group-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text2); padding: 8px 4px 4px; }
+.wiz-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: all 0.15s; position: relative; }
+.wiz-item:hover { border-color: var(--border-focus); background: var(--bg3); }
+.wiz-item.selected { border-color: var(--accent); background: rgba(232,164,74,0.06); }
+.wiz-item.detected { border-left: 3px solid var(--green); }
+.wiz-item .wiz-check { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--border); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; transition: all 0.15s; color: transparent; }
+.wiz-item.selected .wiz-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wiz-item .wiz-icon { font-size: 18px; width: 28px; text-align: center; flex-shrink: 0; }
+.wiz-item .wiz-info { flex: 1; min-width: 0; }
+.wiz-item .wiz-name { font-size: 13px; font-weight: 600; }
+.wiz-item .wiz-detail { font-size: 11px; color: var(--text2); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-item .wiz-badge { font-size: 9px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.wiz-badge.cloud { background: rgba(96,165,250,0.15); color: var(--blue); }
+.wiz-badge.local { background: rgba(74,222,128,0.15); color: var(--green); }
+.wiz-badge.cli { background: rgba(155,122,237,0.15); color: var(--purple); }
+.wiz-badge.ide { background: rgba(232,164,74,0.15); color: var(--accent); }
+.wiz-badge.extension { background: rgba(103,232,249,0.15); color: var(--cyan); }
+.wiz-badge.high { background: rgba(74,222,128,0.15); color: var(--green); }
+.wiz-badge.medium { background: rgba(251,191,36,0.15); color: var(--yellow); }
+.wiz-badge.low { background: rgba(248,113,113,0.12); color: var(--red); }
+
+.wiz-empty { text-align: center; padding: 24px; color: var(--text2); font-size: 12px; }
+.wiz-env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+.wiz-env-item { padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; }
+.wiz-env-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 2px; }
+.wiz-env-val { font-size: 13px; font-weight: 600; }
+
+.wiz-input { width: 100%; padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: inherit; outline: none; margin-top: 8px; }
+.wiz-input:focus { border-color: var(--accent); }
+.wiz-input::placeholder { color: var(--text-dim); }
+
+.wiz-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+.wiz-btn { padding: 10px 24px; border-radius: 10px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.15s; }
+.wiz-btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text2); }
+.wiz-btn-secondary:hover { border-color: var(--border-focus); color: var(--text); }
+.wiz-btn-primary { background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; }
+.wiz-btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+.wiz-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+.wiz-btn-skip { background: none; border: none; color: var(--text2); font-size: 12px; cursor: pointer; padding: 8px 12px; }
+.wiz-btn-skip:hover { color: var(--text); }
+
+.wiz-summary { padding: 16px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; }
+.wiz-summary-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 12px; }
+.wiz-summary-row .label { color: var(--text2); }
+.wiz-summary-row .value { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -2545,6 +2871,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 <header>
 <div class="topbar">
     <div class="topbar-left">
+        <img src="/logo.jpg" alt="OpenSculpt" style="height:22px;width:22px;border-radius:4px;object-fit:cover;vertical-align:middle;margin-right:6px">
         <span class="topbar-brand">OpenSculpt</span>
         <span style="color:var(--text2);font-size:10px" id="h-uptime">00:00:00</span>
     </div>
@@ -2593,7 +2920,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 <!-- ═══ COMMAND BAR (Spotlight-style, always visible) ═══ -->
 <div class="command-bar" id="command-bar">
     <div class="command-bar-inner">
-        <span style="color:var(--purple);font-size:16px;padding-left:8px;cursor:pointer" onclick="if(_chatHistory.length)openChatOverlay();else document.getElementById('os-cmd').focus()" title="Open conversation">&#x1F419;</span>
+        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="if(_chatHistory.length)openChatOverlay();else document.getElementById('os-cmd').focus()" title="Open conversation">
         <input type="text" class="cmd-input" id="os-cmd" placeholder="Ask OpenSculpt anything..." autocomplete="off"
                onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" />
         <button class="cmd-send" onclick="runCommand()" title="Send">&#9654;</button>
@@ -2642,40 +2969,54 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
         </div>
         <div class="modal-body">
             <!-- LLM Provider -->
-            <div style="margin-bottom:16px">
-                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">LLM Provider</label>
-                <div style="display:flex;gap:6px;margin-bottom:8px">
-                    <button id="provider-anthropic" onclick="selectProvider('anthropic')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">Anthropic Direct</button>
-                    <button id="provider-openrouter" onclick="selectProvider('openrouter')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">OpenRouter</button>
-                    <button id="provider-lmstudio" onclick="selectProvider('lmstudio')" style="flex:1;padding:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s">LM Studio</button>
-                </div>
-                <div id="provider-hint" style="font-size:10px;color:var(--text2);margin-bottom:8px"></div>
+            <div style="margin-bottom:14px">
+                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">Provider</label>
+                <select id="provider-select" onchange="onProviderChange()" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;outline:none;cursor:pointer">
+                    <optgroup label="Cloud APIs">
+                        <option value="anthropic">Anthropic (direct)</option>
+                        <option value="openrouter">OpenRouter (proxy, cost tracking)</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="google">Google Gemini</option>
+                        <option value="mistral">Mistral</option>
+                        <option value="groq">Groq</option>
+                        <option value="together">Together AI</option>
+                        <option value="fireworks">Fireworks AI</option>
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="perplexity">Perplexity</option>
+                        <option value="cohere">Cohere</option>
+                    </optgroup>
+                    <optgroup label="Local / Self-hosted">
+                        <option value="lmstudio">LM Studio (local)</option>
+                        <option value="ollama">Ollama (local)</option>
+                        <option value="custom">Custom OpenAI-compatible</option>
+                    </optgroup>
+                </select>
+                <div id="provider-hint" style="font-size:10px;color:var(--text2);margin-top:4px"></div>
+            </div>
+
+            <!-- Base URL (shown for custom/local providers) -->
+            <div id="base-url-row" style="margin-bottom:14px;display:none">
+                <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">Base URL</label>
+                <input id="base-url-input" type="text" placeholder="http://localhost:1234/v1" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none" />
             </div>
 
             <!-- API Key -->
-            <div style="margin-bottom:16px">
+            <div style="margin-bottom:14px">
                 <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">API Key</label>
                 <div style="display:flex;gap:6px">
-                    <input id="api-key-input" type="password" placeholder="sk-ant-api03-..." style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none" />
+                    <input id="api-key-input" type="password" placeholder="sk-..." style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none" />
                     <button onclick="toggleKeyVis()" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:0 10px;color:var(--text2);cursor:pointer;font-size:13px">&#128065;</button>
                 </div>
                 <div id="api-key-status" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>
             </div>
 
             <!-- Model -->
-            <div style="margin-bottom:16px">
+            <div style="margin-bottom:14px">
                 <label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;margin-bottom:6px;font-weight:600">Model</label>
-                <select id="model-select" onchange="onModelChange()" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;outline:none;cursor:pointer">
-                    <optgroup label="Cheap (good for goals)">
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5 (~$0.001/turn)</option>
-                    </optgroup>
-                    <optgroup label="Balanced">
-                        <option value="claude-sonnet-4-20250514">Sonnet 4 (~$0.01/turn)</option>
-                    </optgroup>
-                    <optgroup label="Best (expensive)">
-                        <option value="claude-opus-4-20250514">Opus 4 (~$0.05/turn)</option>
-                    </optgroup>
-                </select>
+                <div style="position:relative">
+                    <input id="model-input" type="text" list="model-suggestions" placeholder="claude-haiku-4-5-20251001" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none" />
+                    <datalist id="model-suggestions"></datalist>
+                </div>
                 <div id="model-status" style="margin-top:4px;font-size:10px;color:var(--text2)"></div>
             </div>
 
@@ -2809,11 +3150,73 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     <div id="health-ring-fill"></div>
     <div id="gh-repo-url"></div>
     <div id="gh-install-status"></div>
-    <div id="wizard-overlay" style="display:none"></div>
     <div id="setup-providers-list"></div>
     <div id="setup-channels-list"></div>
     <div id="setup-tools-list"></div>
     <div id="setup-config-modal"></div>
+</div>
+
+<!-- ═══ SETUP WIZARD (first-run overlay, above everything) ═══ -->
+<div class="wizard-overlay" id="wizard-overlay">
+<div class="wizard-box">
+    <div class="wizard-logo">
+        <img src="/logo.jpg" alt="OpenSculpt" style="width:64px;height:64px;border-radius:12px;object-fit:cover;margin-bottom:12px">
+        <h1>OpenSculpt</h1>
+        <p>The Self-Evolving Agentic OS</p>
+    </div>
+
+    <div class="wizard-steps" id="wizard-steps">
+        <div class="wizard-step-dot active" data-step="0"></div>
+        <div class="wizard-step-dot" data-step="1"></div>
+        <div class="wizard-step-dot" data-step="2"></div>
+        <div class="wizard-step-dot" data-step="3"></div>
+    </div>
+
+    <!-- STEP 0: Scanning -->
+    <div class="wizard-section active" id="wiz-step-0">
+        <h2>Scanning your environment...</h2>
+        <p class="wiz-subtitle">Detecting LLM providers, coding tools, and system capabilities</p>
+        <div class="wizard-scanning"><span class="spin">&#9672;</span> Auto-detecting...</div>
+        <div id="wiz-scan-progress" style="color:var(--text2);font-size:11px;line-height:1.8"></div>
+    </div>
+
+    <!-- STEP 1: LLM Provider -->
+    <div class="wizard-section" id="wiz-step-1">
+        <h2>LLM Provider</h2>
+        <p class="wiz-subtitle">Choose how OpenSculpt talks to AI. Detected providers are highlighted.</p>
+        <div class="wiz-items" id="wiz-providers"></div>
+        <div id="wiz-api-key-input" style="display:none">
+            <input type="password" class="wiz-input" id="wiz-key" placeholder="Paste API key here..." />
+        </div>
+        <div class="wiz-btns">
+            <button class="wiz-btn-skip" onclick="wizStep(2)">Skip for now</button>
+            <button class="wiz-btn wiz-btn-primary" onclick="wizSelectProvider()">Next</button>
+        </div>
+    </div>
+
+    <!-- STEP 2: Vibe Coding Tools -->
+    <div class="wizard-section" id="wiz-step-2">
+        <h2>Vibe Coding Tools</h2>
+        <p class="wiz-subtitle">These tools are the chisels that evolve your OS. We found these on your machine.</p>
+        <div class="wiz-items" id="wiz-vibe-tools"></div>
+        <div class="wiz-btns">
+            <button class="wiz-btn wiz-btn-secondary" onclick="wizStep(1)">Back</button>
+            <button class="wiz-btn wiz-btn-primary" onclick="wizStep(3)">Next</button>
+        </div>
+    </div>
+
+    <!-- STEP 3: Summary + Launch -->
+    <div class="wizard-section" id="wiz-step-3">
+        <h2>Ready to launch</h2>
+        <p class="wiz-subtitle">Here's what we found. You can change any of this in Settings later.</p>
+        <div class="wiz-env-grid" id="wiz-env-grid"></div>
+        <div class="wiz-summary" id="wiz-summary"></div>
+        <div class="wiz-btns">
+            <button class="wiz-btn wiz-btn-secondary" onclick="wizStep(2)">Back</button>
+            <button class="wiz-btn wiz-btn-primary" onclick="wizFinish()">Launch OpenSculpt</button>
+        </div>
+    </div>
+</div>
 </div>
 
 
@@ -2855,8 +3258,11 @@ function cleanPhaseResult(raw) {
     let text = raw
         .replace(/\*\*/g, '')           // bold
         .replace(/\[Verified:.*?\]/gs, '')  // verification blocks
-        .replace(/\[VERIFICATION FAILED:.*?\]/gs, '[verify failed]')
+        .replace(/\[VERIFICATION FAILED:.*?\]/gs, '')
         .replace(/\[Accepted:.*?\]/gs, '')
+        .replace(/\[Diagnosis:.*?\]/gs, '')
+        .replace(/\(token budget.*?\)/gi, '')
+        .replace(/\d{4,} tokens (used|remaining)/gi, '')
         .replace(/\|[-\s|]+\|/g, '')    // table separators
         .replace(/\|/g, ' ')           // table pipes
         .replace(/#{1,4}\s/g, '')       // headers
@@ -2864,8 +3270,13 @@ function cleanPhaseResult(raw) {
         .replace(/\n+/g, ' ')          // newlines
         .replace(/\s{2,}/g, ' ')        // multiple spaces
         .trim();
-    // Take first meaningful sentence (skip "Done!" prefix)
+    // Prefer sentences with outcome words
     const sentences = text.split(/[.!]\s/);
+    const outcomes = sentences.filter(s => s.match(/created|deployed|started|installed|configured|built|running|ready|complete/i));
+    if (outcomes.length) {
+        const s = outcomes[0].trim();
+        return s.slice(0, 100) + (s.length > 100 ? '...' : '');
+    }
     for (const s of sentences) {
         const clean = s.trim();
         if (clean.length > 15 && !clean.match(/^[-\s]+$/)) {
@@ -2873,6 +3284,38 @@ function cleanPhaseResult(raw) {
         }
     }
     return text.slice(0, 80);
+}
+function extractTitle(desc) {
+    if (!desc) return '';
+    const colon = desc.indexOf(':');
+    if (colon > 5 && colon < 60) return desc.slice(0, colon).trim();
+    const sent = desc.search(/[.!?]\s/);
+    if (sent > 5 && sent < 80) return desc.slice(0, sent + 1).trim();
+    if (desc.length > 55) {
+        const cut = desc.lastIndexOf(' ', 55);
+        return desc.slice(0, cut > 20 ? cut : 55) + '...';
+    }
+    return desc;
+}
+function dedupeServices(svcs) {
+    const byPort = {};
+    svcs.forEach(s => {
+        const key = s.port || s.name;
+        if (!byPort[key] || s.status === 'healthy' ||
+            (byPort[key].name.startsWith('goal_') && !s.name.startsWith('goal_')))
+            byPort[key] = s;
+    });
+    return Object.values(byPort);
+}
+function cleanServiceName(name) {
+    if (!name) return 'Service';
+    if (name.match(/^goal_\d+_\d+_/))
+        return name.replace(/^goal_\d+_\d+_/, '').replace(/_/g, ' ');
+    return name;
+}
+function statusLabel(s) {
+    if (s === 'needs_user') return 'Needs setup';
+    return s || 'unknown';
 }
 let _connectionLost = false;
 async function fetchJSON(url) {
@@ -2954,6 +3397,7 @@ function renderDesktop(goals, resources, daemons, learned, services) {
 
     // Active goals as full cards
     activeGoals.forEach((g, gi) => {
+        const idx = goalIdToIdx[g.id] !== undefined ? goalIdToIdx[g.id] : gi;
         const phases = g.phases || [];
         const done = phases.filter(p => p.status === 'done' || p.status === 'done_unverified').length;
         const total = phases.length;
@@ -2965,8 +3409,8 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         const cardClass = isComplete ? 'complete' : failed ? 'failed' : 'active-goal';
         const statusColor = isComplete ? 'var(--green)' : g.status === 'operating' ? 'var(--cyan)' : failed ? 'var(--red)' : 'var(--purple)';
         // Enforce: active goals always expanded, completed always collapsed (unless user toggled)
-        if (isActive) _collapsedGoals.delete(gi);
-        if (isComplete && !_expandedResources.has('gphases-shown-' + gi)) _collapsedGoals.add(gi);
+        if (isActive) _collapsedGoals.delete(idx);
+        if (isComplete && !_expandedResources.has('gphases-shown-' + idx)) _collapsedGoals.add(idx);
         const statusText = isComplete ? 'COMPLETE' : g.status || 'active';
         const ringColor = isComplete ? '#43e97b' : failed ? '#f85149' : '#a855f7';
 
@@ -2975,11 +3419,11 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         const containers = goalRes.filter(r => r.type === 'container');
         const files = goalRes.filter(r => r.type === 'file');
 
-        html += '<div class="goal-card ' + cardClass + '" id="gcard-' + gi + '" style="position:relative">';
-        html += '<button class="expand-btn" onclick="event.stopPropagation();expandGoal(' + gi + ')" title="Expand">&#x2922;</button>';
+        html += '<div class="goal-card ' + cardClass + '" id="gcard-' + idx + '" style="position:relative">';
+        html += '<button class="expand-btn" onclick="event.stopPropagation();expandGoal(' + idx + ')" title="Expand">&#x2922;</button>';
 
         // Header with ring
-        html += '<div class="goal-card-header" onclick="toggleGoalCard(' + gi + ')">';
+        html += '<div class="goal-card-header" onclick="toggleGoalCard(' + idx + ')">';
         html += '<div class="goal-card-ring"><svg viewBox="0 0 48 48">';
         html += '<circle class="ring-bg" cx="24" cy="24" r="20"/>';
         const dashOffset = RING_CIRC * (1 - pct / 100);
@@ -2987,7 +3431,7 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         html += '<text class="ring-text" x="24" y="24">' + done + '/' + total + '</text>';
         html += '</svg></div>';
         html += '<div class="goal-card-title">';
-        html += '<h3 title="' + esc(g.description || '') + '">' + esc(g.description || '') + '</h3>';
+        html += '<h3 title="' + esc(g.description || '') + '">' + esc(extractTitle(g.description || '')) + '</h3>';
         const tokenCount = g._total_tokens || 0;
         const tokenLabel = tokenCount > 1000 ? Math.round(tokenCount / 1000) + 'K tokens' : '';
         html += '<span class="goal-status" style="color:' + statusColor + '">' + statusText + ' &middot; ' + done + '/' + total + (tokenLabel ? ' &middot; ' + tokenLabel : '') + '</span>';
@@ -3086,8 +3530,8 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         }
 
         // Phases (collapsible) — auto-collapsed for completed, expanded for active
-        const collapsed = _collapsedGoals.has(gi);
-        html += '<div class="goal-card-phases" id="gphases-' + gi + '"' + (collapsed ? ' style="display:none"' : '') + '>';
+        const collapsed = _collapsedGoals.has(idx);
+        html += '<div class="goal-card-phases" id="gphases-' + idx + '"' + (collapsed ? ' style="display:none"' : '') + '>';
         phases.forEach((p, pi) => {
             let pColor = 'var(--text2)', pIcon = '&#9675;';
             if (p.status === 'done') { pColor = 'var(--green)'; pIcon = '&#10003;'; }
@@ -3119,7 +3563,7 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         html += '</div>';
 
         // Footer — grouped resources with cross-linking
-        const resId = 'gres-' + gi;
+        const resId = 'gres-' + idx;
         html += '<div class="goal-card-footer" style="cursor:pointer" onclick="toggleResources(\'' + resId + '\')">';
         if (containers.length) {
             const up = containers.filter(c => c.status === 'active').length;
@@ -3192,7 +3636,7 @@ function renderDesktop(goals, resources, daemons, learned, services) {
     });
 
     // ── Services (from completed goals that deployed something) — OS shows what's RUNNING ──
-    const allServices = (services || []);
+    const allServices = dedupeServices(services || []);
     const goalServices = completedGoals.filter(g => g.service_health && g.service_health !== 'no_services' && g.service_health !== 'unknown');
     if (goalServices.length > 0 || allServices.length > 0) {
         html += '<div class="special-card" style="grid-column:1/-1">';
@@ -3203,20 +3647,21 @@ function renderDesktop(goals, resources, daemons, learned, services) {
             const shColor = sh === 'up' ? 'var(--green)' : sh === 'down' ? 'var(--red)' : 'var(--yellow)';
             const shIcon = sh === 'up' ? '&#9679;' : sh === 'down' ? '&#9679;' : '&#9675;';
             const shLabel = sh === 'up' ? 'Healthy' : sh === 'down' ? 'Down' : 'Unknown';
-            const idx = goalIdToIdx[g.id] !== undefined ? goalIdToIdx[g.id] : ci;
-            html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);cursor:pointer" onclick="expandGoal(' + idx + ')">';
+            const gIdx = goalIdToIdx[g.id] !== undefined ? goalIdToIdx[g.id] : ci;
+            html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);cursor:pointer" onclick="expandGoal(' + gIdx + ')">';
             html += '<span style="color:' + shColor + ';font-size:12px">' + shIcon + '</span>';
-            html += '<span style="flex:1;font-size:13px;color:var(--text);font-weight:500">' + esc((g.description || '').slice(0, 60)) + '</span>';
+            html += '<span style="flex:1;font-size:13px;color:var(--text);font-weight:500">' + esc(extractTitle(g.description || '')) + '</span>';
             html += '<span style="font-size:11px;color:' + shColor + ';font-weight:600">' + shLabel + '</span>';
             html += '</div>';
         });
         if (!goalServices.length && allServices.length) {
             allServices.forEach(s => {
-                const color = s.status === 'running' ? 'var(--green)' : 'var(--red)';
+                const sColor = s.status === 'healthy' || s.status === 'running' ? 'var(--green)' : s.status === 'needs_user' ? 'var(--yellow)' : 'var(--red)';
                 html += '<div style="display:flex;align-items:center;gap:10px;padding:6px 4px;font-size:12px">';
-                html += '<span style="color:' + color + '">&#9679;</span>';
-                html += '<span style="color:var(--text)">' + esc(s.name || s.container || '') + '</span>';
-                html += '<span style="color:' + color + ';margin-left:auto">' + (s.status || 'unknown') + '</span>';
+                html += '<span style="color:' + sColor + '">&#9679;</span>';
+                html += '<span style="flex:1;color:var(--text)">' + esc(cleanServiceName(s.name || s.container || '')) + '</span>';
+                html += '<span style="color:' + sColor + ';margin-left:auto">' + statusLabel(s.status) + '</span>';
+                if (s.status === 'needs_user') html += '<button onclick="quickCmd(\'help me set up ' + esc(cleanServiceName(s.name || '')) + '\')" style="background:var(--yellow);color:#000;border:none;border-radius:6px;padding:2px 10px;font-size:10px;font-weight:600;cursor:pointer;margin-left:6px">Get Help</button>';
                 html += '</div>';
             });
         }
@@ -3349,14 +3794,17 @@ function renderDock(daemons) {
     let html = '';
 
     // ── ACTIVE GOALS first — these are the "running apps" in the taskbar ──
+    const dockGoalIdx = {};
+    (_goalData || []).forEach((g, i) => { dockGoalIdx[g.id] = i; });
     const activeGoals = (_goalData || []).filter(g => g.status === 'active' || g.status === 'operating' || g.status === 'planning');
     activeGoals.forEach((g, gi) => {
+        const idx = dockGoalIdx[g.id] !== undefined ? dockGoalIdx[g.id] : gi;
         const phases = g.phases || [];
         const done = phases.filter(p => p.status === 'done' || p.status === 'done_unverified').length;
         const total = phases.length;
         const running = phases.find(p => p.status === 'running');
-        const shortDesc = (g.description || '').slice(0, 30) + ((g.description || '').length > 30 ? '...' : '');
-        html += '<div class="dock-item" onclick="expandGoal(' + gi + ')" title="' + esc(g.description || '') + '" style="background:rgba(155,122,237,0.1);border:1px solid rgba(155,122,237,0.3);font-weight:600">';
+        const shortDesc = extractTitle(g.description || '').slice(0, 30) + (extractTitle(g.description || '').length > 30 ? '...' : '');
+        html += '<div class="dock-item" onclick="expandGoal(' + idx + ')" title="' + esc(g.description || '') + '" style="background:rgba(155,122,237,0.1);border:1px solid rgba(155,122,237,0.3);font-weight:600">';
         html += '<span class="dock-icon" style="font-size:12px">' + done + '/' + total + '</span>';
         html += '<span class="dock-label" style="color:var(--text);max-width:160px">' + esc(shortDesc) + '</span>';
         if (running) html += '<span style="display:inline-block;width:6px;height:6px;background:var(--cyan);border-radius:50%;animation:dotPulse 1s infinite;margin-left:4px"></span>';
@@ -3446,8 +3894,8 @@ async function toggleServicesPanel() {
     }
     panel.style.cssText = 'position:fixed;bottom:52px;right:20px;width:380px;max-height:70vh;background:rgba(17,19,26,0.97);border:1px solid var(--border);border-radius:14px;backdrop-filter:blur(20px);box-shadow:0 -8px 40px rgba(0,0,0,0.5);z-index:200;display:flex;flex-direction:column;overflow:hidden;animation:slideUp 0.2s ease';
 
-    // Filter out useless services (no port, no health check, no start command)
-    const usable = services.filter(s => s.port && s.port !== 0 && s.port !== 'N/A');
+    // Filter out useless services, then deduplicate by port
+    const usable = dedupeServices(services.filter(s => s.port && s.port !== 0 && s.port !== 'N/A'));
 
     // Group services by goal
     const byGoal = {};
@@ -3472,17 +3920,17 @@ async function toggleServicesPanel() {
     }
 
     Object.entries(byGoal).forEach(([gid, svcs]) => {
-        const goalName = goalNames[gid] || (gid === 'unlinked' ? 'Standalone' : gid.slice(0, 20));
+        const goalName = goalNames[gid] ? extractTitle(goalNames[gid]) : (gid === 'unlinked' ? 'Standalone' : gid.slice(0, 20));
         html += '<div style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;padding:10px 0 4px;border-bottom:1px solid rgba(35,45,63,0.3)">' + esc(goalName) + '</div>';
 
         svcs.forEach(svc => {
-            const sColor = svc.status === 'healthy' ? 'var(--green)' : svc.status === 'crashed' || svc.status === 'needs_user' ? 'var(--red)' : svc.status === 'debugging' ? 'var(--yellow)' : 'var(--text2)';
-            const sDot = svc.status === 'healthy' ? '&#9679;' : svc.status === 'crashed' ? '&#10007;' : svc.status === 'debugging' ? '&#8635;' : '&#9675;';
+            const sColor = svc.status === 'healthy' || svc.status === 'running' ? 'var(--green)' : svc.status === 'crashed' ? 'var(--red)' : svc.status === 'needs_user' ? 'var(--yellow)' : svc.status === 'debugging' ? 'var(--yellow)' : 'var(--text2)';
+            const sDot = svc.status === 'healthy' || svc.status === 'running' ? '&#9679;' : svc.status === 'crashed' ? '&#10007;' : svc.status === 'debugging' ? '&#8635;' : '&#9675;';
 
             html += '<div style="padding:8px 0;display:flex;align-items:flex-start;gap:10px">';
             html += '<span style="color:' + sColor + ';font-size:12px;margin-top:2px">' + sDot + '</span>';
             html += '<div style="flex:1;min-width:0">';
-            html += '<div style="font-size:12px;font-weight:600;color:var(--text)">' + esc(svc.name) + '</div>';
+            html += '<div style="font-size:12px;font-weight:600;color:var(--text)">' + esc(cleanServiceName(svc.name)) + '</div>';
 
             if (svc.port && svc.port !== 0 && svc.port !== 'N/A') {
                 html += '<a href="http://localhost:' + svc.port + '" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;display:block;margin-top:2px">&#x1F517; localhost:' + svc.port + '</a>';
@@ -3491,7 +3939,7 @@ async function toggleServicesPanel() {
                 html += '<div style="font-size:10px;color:var(--yellow);margin-top:2px">&#x1F511; ' + esc(svc.credentials_hint) + '</div>';
             }
             const uptime = svc.last_healthy ? 'since ' + svc.last_healthy.slice(11, 16) : '';
-            html += '<div style="font-size:10px;color:' + sColor + ';margin-top:2px">' + esc(svc.status);
+            html += '<div style="font-size:10px;color:' + sColor + ';margin-top:2px">' + statusLabel(svc.status);
             if (svc.restart_count > 0) html += ' &middot; ' + svc.restart_count + ' restarts';
             if (uptime) html += ' &middot; ' + uptime;
             html += '</div>';
@@ -3499,8 +3947,10 @@ async function toggleServicesPanel() {
 
             // Action buttons
             html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-top:2px">';
-            if (svc.status === 'healthy') {
+            if (svc.status === 'healthy' || svc.status === 'running') {
                 html += '<button onclick="fetch(\'/api/services/' + encodeURIComponent(svc.name) + '/stop\',{method:\'POST\'}).then(()=>toggleServicesPanel())" style="background:none;border:1px solid var(--red);color:var(--red);border-radius:6px;padding:2px 8px;font-size:9px;cursor:pointer">Stop</button>';
+            } else if (svc.status === 'needs_user') {
+                html += '<button onclick="quickCmd(\'help me set up ' + esc(cleanServiceName(svc.name)) + '\')" style="background:var(--yellow);color:#000;border:none;border-radius:6px;padding:2px 8px;font-size:9px;font-weight:600;cursor:pointer">Get Help</button>';
             } else {
                 html += '<button onclick="fetch(\'/api/services/' + encodeURIComponent(svc.name) + '/restart\',{method:\'POST\'}).then(()=>toggleServicesPanel())" style="background:none;border:1px solid var(--green);color:var(--green);border-radius:6px;padding:2px 8px;font-size:9px;cursor:pointer">Restart</button>';
             }
@@ -3896,13 +4346,20 @@ async function refreshDesktop() {
         }
     }
 
-    // Token/cost in topbar
+    // Token/cost in topbar — REAL cost from actual API usage
     if (status) {
         const tokens = status.session_tokens || 0;
-        if (tokens > 0) {
-            const costEst = ((tokens * 0.6 / 1e6) * 0.40 + (tokens * 0.4 / 1e6) * 1.10).toFixed(2);
+        const realCost = status.session_cost_usd || 0;
+        const lifetimeCost = (status.lifetime_cost && status.lifetime_cost.total_usd) || 0;
+        const totalCost = realCost + lifetimeCost;
+        if (tokens > 0 || totalCost > 0) {
             const tbCost = document.getElementById('tb-cost');
-            if (tbCost) tbCost.textContent = (tokens / 1000).toFixed(0) + 'K tok (~$' + costEst + ')';
+            if (tbCost) {
+                const tokStr = tokens >= 1000 ? (tokens / 1000).toFixed(0) + 'K' : tokens;
+                const costStr = totalCost >= 0.01 ? '$' + totalCost.toFixed(2) : '$' + totalCost.toFixed(4);
+                tbCost.textContent = tokStr + ' tok (' + costStr + ')';
+                tbCost.title = 'Session: $' + realCost.toFixed(4) + ' | Lifetime: $' + lifetimeCost.toFixed(2) + ' | In: ' + (status.session_input_tokens||0) + ' | Out: ' + (status.session_output_tokens||0);
+            }
         }
     }
 
@@ -3928,7 +4385,7 @@ async function refreshDesktop() {
 
     // Chat badge
     if (_chatHistory.length > 0) {
-        const cmdIcon = document.querySelector('.command-bar-inner > span');
+        const cmdIcon = document.querySelector('.command-bar-inner > img') || document.querySelector('.command-bar-inner > span');
         if (cmdIcon && !document.getElementById('chat-badge')) {
             const badge = document.createElement('span');
             badge.id = 'chat-badge';
@@ -4160,7 +4617,7 @@ function expandGoal(idx) {
     if (g.completion_summary) {
         html += '<div style="margin-top:12px;padding:10px;background:rgba(67,233,123,0.06);border-radius:8px;border:1px solid rgba(67,233,123,0.2)"><div style="font-size:12px;font-weight:600;color:var(--green);margin-bottom:4px">Completion Summary</div><div style="font-size:12px;color:var(--text);white-space:pre-wrap">' + esc(g.completion_summary) + '</div></div>';
     }
-    openDetail(esc((g.description || '').slice(0, 60)), html);
+    openDetail(esc(extractTitle(g.description || '')), html);
 }
 
 async function expandVitals() {
@@ -4309,16 +4766,29 @@ function openSettings() {
     document.getElementById('settings-modal').classList.add('active');
     fetchJSON('/api/settings').then(s => {
         if (!s) return;
+        // Set active provider in dropdown
+        const activeProvider = s.active_provider || 'anthropic';
+        const provSel = document.getElementById('provider-select');
+        if (provSel) { provSel.value = activeProvider; onProviderChange(); }
+        // Set current model
+        if (s.model) {
+            const modelInput = document.getElementById('model-input');
+            if (modelInput) modelInput.value = s.model;
+            document.getElementById('model-status').textContent = 'Current: ' + s.model;
+        }
+        // API key status
         const akStatus = document.getElementById('api-key-status');
         if (s.has_api_key) {
-            akStatus.innerHTML = '<span style="color:var(--green)">&#10003; Configured:</span> <code style="color:var(--cyan)">' + esc(s.api_key_preview) + '</code>';
+            akStatus.innerHTML = '<span style="color:var(--green)">&#10003; Active:</span> ' + esc(activeProvider) + ' <code style="color:var(--cyan)">' + esc(s.api_key_preview) + '</code>';
         } else {
-            akStatus.innerHTML = '<span style="color:var(--yellow)">&#x26A0; No API key set</span>';
+            akStatus.innerHTML = '<span style="color:var(--yellow)">&#x26A0; No API key — set one to use the OS</span>';
         }
+        // GitHub token
         const ghStatus = document.getElementById('gh-token-status');
         if (s.has_github_token) {
             ghStatus.innerHTML = '<span style="color:var(--green)">&#10003; Configured:</span> <code style="color:var(--cyan)">' + esc(s.github_token_preview) + '</code>';
         }
+        // Fleet sync
         const toggle = document.getElementById('fed-toggle');
         const isOn = s.auto_share_every > 0;
         toggle.checked = isOn;
@@ -4329,46 +4799,65 @@ function openSettings() {
 function closeSettings() { document.getElementById('settings-modal').classList.remove('active'); }
 function toggleKeyVis() { const inp = document.getElementById('api-key-input'); inp.type = inp.type === 'password' ? 'text' : 'password'; }
 
-let _selectedProvider = 'anthropic';
-const _providerHints = {
-    anthropic: 'Direct Anthropic API. Get key from console.anthropic.com. Cheapest per-token.',
-    openrouter: 'OpenRouter proxy. Get key from openrouter.ai. Lets you monitor spend.',
-    lmstudio: 'Local LM Studio. Free, no API key needed. Set URL in env: SCULPT_LMSTUDIO_BASE_URL'
+const _providerMeta = {
+    anthropic:  { hint: 'console.anthropic.com', placeholder: 'sk-ant-api03-...', local: false, baseUrl: '',
+                  models: ['claude-haiku-4-5-20251001','claude-sonnet-4-20250514','claude-opus-4-20250514'] },
+    openrouter: { hint: 'openrouter.ai — tracks spend', placeholder: 'sk-or-v1-...', local: false, baseUrl: 'https://openrouter.ai/api/v1',
+                  models: ['anthropic/claude-3.5-haiku','anthropic/claude-sonnet-4','anthropic/claude-opus-4','google/gemini-2.5-flash','google/gemini-2.5-pro','meta-llama/llama-4-maverick','deepseek/deepseek-chat-v3','mistralai/mistral-medium'] },
+    openai:     { hint: 'platform.openai.com', placeholder: 'sk-...', local: false, baseUrl: 'https://api.openai.com/v1',
+                  models: ['gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-mini','o3','o4-mini'] },
+    google:     { hint: 'aistudio.google.com', placeholder: 'AIza...', local: false, baseUrl: '',
+                  models: ['gemini-2.5-flash','gemini-2.5-pro','gemini-2.0-flash'] },
+    mistral:    { hint: 'console.mistral.ai', placeholder: 'sk-...', local: false, baseUrl: 'https://api.mistral.ai/v1',
+                  models: ['mistral-large-latest','mistral-medium-latest','mistral-small-latest','codestral-latest'] },
+    groq:       { hint: 'console.groq.com — fastest inference', placeholder: 'gsk_...', local: false, baseUrl: 'https://api.groq.com/openai/v1',
+                  models: ['llama-3.3-70b-versatile','llama-3.1-8b-instant','mixtral-8x7b-32768','gemma2-9b-it'] },
+    together:   { hint: 'api.together.xyz', placeholder: 'sk-...', local: false, baseUrl: 'https://api.together.xyz/v1',
+                  models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo','Qwen/Qwen2.5-72B-Instruct-Turbo','deepseek-ai/DeepSeek-V3'] },
+    fireworks:  { hint: 'fireworks.ai', placeholder: 'fw_...', local: false, baseUrl: 'https://api.fireworks.ai/inference/v1',
+                  models: ['accounts/fireworks/models/llama-v3p3-70b-instruct','accounts/fireworks/models/qwen2p5-72b-instruct'] },
+    deepseek:   { hint: 'platform.deepseek.com', placeholder: 'sk-...', local: false, baseUrl: 'https://api.deepseek.com/v1',
+                  models: ['deepseek-chat','deepseek-reasoner'] },
+    perplexity: { hint: 'perplexity.ai — with search', placeholder: 'pplx-...', local: false, baseUrl: 'https://api.perplexity.ai',
+                  models: ['sonar-pro','sonar','sonar-reasoning-pro'] },
+    cohere:     { hint: 'dashboard.cohere.com', placeholder: 'sk-...', local: false, baseUrl: 'https://api.cohere.com/v2',
+                  models: ['command-r-plus','command-r','command-a-03-2025'] },
+    lmstudio:   { hint: 'Free, local. Start LM Studio first.', placeholder: 'not needed', local: true, baseUrl: 'http://host.docker.internal:1234/v1',
+                  models: ['local-model'] },
+    ollama:     { hint: 'Free, local. Start Ollama first.', placeholder: 'not needed', local: true, baseUrl: 'http://host.docker.internal:11434/v1',
+                  models: ['llama3.3','qwen2.5','deepseek-r1','gemma2'] },
+    custom:     { hint: 'Any OpenAI-compatible API', placeholder: 'your-api-key', local: false, baseUrl: '',
+                  models: [] },
 };
-const _providerPlaceholders = {
-    anthropic: 'sk-ant-api03-...',
-    openrouter: 'sk-or-v1-...',
-    lmstudio: 'not needed (leave empty)'
-};
-const _orModels = {
-    'anthropic/claude-3.5-haiku': 'Haiku 3.5 via OR (~$0.001/turn)',
-    'anthropic/claude-sonnet-4': 'Sonnet 4 via OR (~$0.01/turn)',
-    'anthropic/claude-opus-4': 'Opus 4 via OR (~$0.05/turn)'
-};
-function selectProvider(name) {
-    _selectedProvider = name;
-    ['anthropic','openrouter','lmstudio'].forEach(p => {
-        const btn = document.getElementById('provider-' + p);
-        if (btn) btn.style.borderColor = p === name ? 'var(--purple)' : 'var(--border)';
-    });
-    document.getElementById('provider-hint').textContent = _providerHints[name] || '';
-    document.getElementById('api-key-input').placeholder = _providerPlaceholders[name] || 'API key...';
-    // Update model dropdown for OpenRouter
-    const sel = document.getElementById('model-select');
-    if (name === 'openrouter') {
-        sel.innerHTML = '';
-        Object.entries(_orModels).forEach(([v,l]) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); });
-    } else if (name === 'lmstudio') {
-        sel.innerHTML = '<option value="local">Local model (auto-detect)</option>';
+function onProviderChange() {
+    const sel = document.getElementById('provider-select');
+    const name = sel.value;
+    const meta = _providerMeta[name] || {};
+    // Hint
+    document.getElementById('provider-hint').textContent = meta.hint || '';
+    // Key placeholder
+    document.getElementById('api-key-input').placeholder = meta.placeholder || 'API key...';
+    // Base URL row — show for local/custom providers
+    const baseRow = document.getElementById('base-url-row');
+    if (meta.local || name === 'custom') {
+        baseRow.style.display = '';
+        document.getElementById('base-url-input').value = meta.baseUrl || '';
     } else {
-        sel.innerHTML = '<optgroup label="Cheap"><option value="claude-haiku-4-5-20251001">Haiku 4.5 (~$0.001/turn)</option></optgroup>' +
-            '<optgroup label="Balanced"><option value="claude-sonnet-4-20250514">Sonnet 4 (~$0.01/turn)</option></optgroup>' +
-            '<optgroup label="Best"><option value="claude-opus-4-20250514">Opus 4 (~$0.05/turn)</option></optgroup>';
+        baseRow.style.display = 'none';
     }
-}
-function onModelChange() {
-    const model = document.getElementById('model-select').value;
-    document.getElementById('model-status').textContent = 'Model: ' + model;
+    // Model suggestions
+    const dl = document.getElementById('model-suggestions');
+    dl.innerHTML = '';
+    (meta.models || []).forEach(m => { const o = document.createElement('option'); o.value = m; dl.appendChild(o); });
+    // Pre-fill first model
+    const modelInput = document.getElementById('model-input');
+    if (meta.models && meta.models.length > 0) {
+        modelInput.value = meta.models[0];
+        modelInput.placeholder = meta.models[0];
+    } else {
+        modelInput.value = '';
+        modelInput.placeholder = 'type model name...';
+    }
 }
 async function testConnection() {
     const btn = document.getElementById('test-conn-btn');
@@ -4409,16 +4898,34 @@ function updateReciprocityInfo(isContributor) {
     else el.innerHTML = '<span style="color:var(--yellow)">&#x26A0; Observer only</span> \u2014 enable sharing.';
 }
 async function saveApiKey() {
+    const provider = document.getElementById('provider-select').value;
     const key = document.getElementById('api-key-input').value.trim();
-    if (!key) { document.getElementById('api-key-status').innerHTML = '<span style="color:var(--red)">Enter a key</span>'; return; }
-    const resp = await fetch('/api/settings/apikey', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({api_key: key}) });
+    const model = document.getElementById('model-input').value.trim();
+    const baseUrl = document.getElementById('base-url-input')?.value?.trim() || '';
+    const meta = _providerMeta[provider] || {};
+    if (!key && !meta.local) {
+        document.getElementById('api-key-status').innerHTML = '<span style="color:var(--red)">Enter an API key</span>';
+        return;
+    }
+    if (!model) {
+        document.getElementById('api-key-status').innerHTML = '<span style="color:var(--red)">Enter a model name</span>';
+        return;
+    }
+    const resp = await fetch('/api/settings/apikey', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({api_key: key, provider: provider, model: model, base_url: baseUrl || meta.baseUrl || ''})
+    });
     const data = await resp.json();
     const status = document.getElementById('api-key-status');
     if (data.ok) {
-        status.innerHTML = '<span style="color:var(--green)">&#10003; Saved:</span> <code style="color:var(--cyan)">' + esc(data.preview) + '</code>';
+        status.innerHTML = '<span style="color:var(--green)">&#10003; Saved:</span> ' + esc(provider) + ' / ' + esc(model);
         document.getElementById('api-key-input').value = '';
-        document.getElementById('key-pulse').style.background = 'var(--green)';
-    } else status.innerHTML = '<span style="color:var(--red)">' + esc(data.error) + '</span>';
+        const pulse = document.getElementById('key-pulse');
+        if (pulse) pulse.style.background = 'var(--green)';
+    } else {
+        status.innerHTML = '<span style="color:var(--red)">' + esc(data.error) + '</span>';
+    }
 }
 async function saveGHToken() {
     const token = document.getElementById('gh-token-input').value.trim();
@@ -4440,15 +4947,296 @@ async function toggleFederated() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   WIZARD CHECK (auto-complete on containers)
+   SETUP WIZARD — first-run auto-detection + configuration
    ═══════════════════════════════════════════════════════════════════ */
+
+let _wizData = null;        // cached detect-all response
+let _wizProvider = null;    // selected provider
+let _wizVibeTools = [];     // selected vibe tools
+let _wizNeedsKey = false;   // whether selected provider needs manual key
+let _wizProviderMap = {};   // name -> provider data (avoids JSON in attributes)
+let _wizVibeMap = {};       // name -> vibe tool data
+
+const _providerIcons = {
+    anthropic: '&#x1F9E0;', openai: '&#x2728;', groq: '&#9889;', deepseek: '&#x1F50D;',
+    openrouter: '&#x1F310;', gemini: '&#x1F48E;', ollama: '&#x1F999;', lmstudio: '&#x1F4BB;',
+    claude_code: '&#x1F419;', together: '&#x1F91D;', xai: '&#x1F916;', mistral: '&#x1F32A;',
+    cohere: '&#x1F4AC;', vllm: '&#9889;',
+};
+const _vibeIcons = {
+    claude_code: '&#x1F419;', cursor: '&#x1F4DD;', windsurf: '&#x1F3C4;', aider: '&#x1F527;',
+    codex: '&#x2728;', github_copilot: '&#x1F4A1;', cline: '&#x1F50C;', roo_code: '&#x1F998;',
+    continue_dev: '&#x27A1;', copilot_cli: '&#x1F4BB;', gemini_cli: '&#x1F48E;', amp: '&#x26A1;',
+};
 
 async function wizardCheck() {
     const d = await fetchJSON('/api/wizard/status');
-    if (d && d.first_run) {
-        // Auto-complete wizard for containers
-        await fetch('/api/wizard/complete', { method: 'POST' });
+    if (!d || !d.first_run) return;
+    // Show wizard overlay
+    document.getElementById('wizard-overlay').classList.add('active');
+    // Start scanning
+    await wizScan();
+}
+
+async function wizScan() {
+    const progress = document.getElementById('wiz-scan-progress');
+    progress.innerHTML = 'Checking LLM providers...<br>';
+
+    _wizData = await fetchJSON('/api/wizard/detect-all');
+
+    if (!_wizData) {
+        progress.innerHTML += '<span style="color:var(--red)">Detection failed. You can configure manually in Settings.</span>';
+        // Still advance — let user configure manually
+        _wizData = { providers: [], vibe_tools: [], environment: {} };
+        await new Promise(r => setTimeout(r, 1500));
+        wizStep(1);
+        return;
     }
+    const d = _wizData;
+    const pCount = d.providers ? d.providers.length : 0;
+    const vInstalled = d.vibe_tools ? d.vibe_tools.filter(t => t.installed && t.confidence !== 'low').length : 0;
+    progress.innerHTML = 'Checking LLM providers... <span style="color:var(--green)">' + pCount + ' found</span><br>';
+    progress.innerHTML += 'Scanning vibe coding tools... <span style="color:var(--green)">' + vInstalled + ' found</span><br>';
+    progress.innerHTML += 'Probing environment... <span style="color:var(--green)">' + (d.environment.os || 'OK') + '</span><br>';
+    // Brief pause to show results, then advance
+    await new Promise(r => setTimeout(r, 800));
+    wizStep(1);
+}
+
+function wizStep(n) {
+    // Update dots
+    document.querySelectorAll('.wizard-step-dot').forEach((dot, i) => {
+        dot.classList.remove('active');
+        dot.classList.toggle('done', i < n);
+        if (i === n) dot.classList.add('active');
+    });
+    // Show section
+    document.querySelectorAll('.wizard-section').forEach(s => s.classList.remove('active'));
+    const section = document.getElementById('wiz-step-' + n);
+    if (section) section.classList.add('active');
+    // Populate on first show
+    if (n === 1) wizPopulateProviders();
+    if (n === 2) wizPopulateVibeTools();
+    if (n === 3) wizPopulateSummary();
+}
+
+function wizPopulateProviders() {
+    const container = document.getElementById('wiz-providers');
+    if (container.dataset.populated === 'true') return;
+    if (!_wizData) return;
+    container.dataset.populated = 'true';
+    const d = _wizData;
+    const detected = new Set((d.providers || []).map(p => p.name));
+
+    // All known providers — detected ones first, then the rest
+    const allProviders = [
+        { name: 'claude_code', label: 'Claude Code (free, your subscription)', type: 'local' },
+        { name: 'anthropic', label: 'Anthropic (Claude)', type: 'cloud' },
+        { name: 'openai', label: 'OpenAI', type: 'cloud' },
+        { name: 'openrouter', label: 'OpenRouter', type: 'cloud' },
+        { name: 'groq', label: 'Groq', type: 'cloud' },
+        { name: 'deepseek', label: 'DeepSeek', type: 'cloud' },
+        { name: 'gemini', label: 'Google Gemini', type: 'cloud' },
+        { name: 'ollama', label: 'Ollama', type: 'local' },
+        { name: 'lmstudio', label: 'LM Studio', type: 'local' },
+        { name: 'xai', label: 'xAI / Grok', type: 'cloud' },
+        { name: 'mistral', label: 'Mistral', type: 'cloud' },
+        { name: 'together', label: 'Together AI', type: 'cloud' },
+        { name: 'cohere', label: 'Cohere', type: 'cloud' },
+    ];
+    // Merge detected details (key_preview, models) into allProviders
+    const detectedMap = {};
+    for (const p of (d.providers || [])) detectedMap[p.name] = p;
+
+    // Sort: detected first
+    const sorted = [...allProviders].sort((a, b) => {
+        const aD = detected.has(a.name) ? 1 : 0;
+        const bD = detected.has(b.name) ? 1 : 0;
+        return bD - aD;
+    });
+
+    let html = '';
+    let addedOtherLabel = false;
+    for (const p of sorted) {
+        const isDetected = detected.has(p.name);
+        const det = detectedMap[p.name];
+        // Group label: "Other providers" before first non-detected
+        if (!isDetected && !addedOtherLabel && detected.size > 0) {
+            addedOtherLabel = true;
+            html += '<div class="wiz-group-label">Other providers</div>';
+        }
+        const icon = _providerIcons[p.name] || '&#x1F4E6;';
+        const badge = p.type === 'local' ? '<span class="wiz-badge local">Local</span>' :
+                      '<span class="wiz-badge cloud">Cloud</span>';
+        const detBadge = isDetected ? ' <span class="wiz-badge high">Detected</span>' : '';
+        let detail = '';
+        if (isDetected && det) {
+            detail = det.type === 'local'
+                ? (det.models && det.models.length ? det.models.slice(0,3).join(', ') : 'Running')
+                : (det.key_preview || 'API key detected');
+        } else {
+            detail = p.type === 'local' ? 'Not running' : 'Requires API key';
+        }
+        const needsKey = !isDetected && p.type === 'cloud';
+        const cls = isDetected ? 'wiz-item detected' : 'wiz-item';
+        _wizProviderMap[p.name] = det || p;
+        html += '<div class="' + cls + '" data-pname="' + esc(p.name) + '" data-needs-key="' + needsKey + '" onclick="wizToggleProvider(this)">' +
+            '<div class="wiz-check">&#x2713;</div>' +
+            '<div class="wiz-icon">' + icon + '</div>' +
+            '<div class="wiz-info"><div class="wiz-name">' + esc(p.label) + '</div>' +
+            '<div class="wiz-detail">' + esc(detail) + '</div></div>' +
+            badge + detBadge + '</div>';
+    }
+    container.innerHTML = html;
+    // Auto-select first detected provider
+    const firstDetected = container.querySelector('.wiz-item.detected');
+    const first = firstDetected || container.querySelector('.wiz-item');
+    if (first) {
+        first.classList.add('selected');
+        _wizProvider = _wizProviderMap[first.dataset.pname] || null;
+        _wizNeedsKey = first.dataset.needsKey === 'true';
+    }
+    if (_wizNeedsKey) document.getElementById('wiz-api-key-input').style.display = 'block';
+}
+
+function wizToggleProvider(el) {
+    document.querySelectorAll('#wiz-providers .wiz-item').forEach(i => i.classList.remove('selected'));
+    el.classList.add('selected');
+    _wizProvider = _wizProviderMap[el.dataset.pname] || null;
+    _wizNeedsKey = el.dataset.needsKey === 'true';
+    document.getElementById('wiz-api-key-input').style.display = _wizNeedsKey ? 'block' : 'none';
+}
+
+function wizSelectProvider() {
+    if (_wizNeedsKey) {
+        const key = document.getElementById('wiz-key').value.trim();
+        if (!key) { document.getElementById('wiz-key').focus(); return; }
+        // Infer provider from key prefix
+        let name = 'openai';
+        if (key.startsWith('sk-ant')) name = 'anthropic';
+        else if (key.startsWith('gsk_')) name = 'groq';
+        else if (key.startsWith('sk-or-')) name = 'openrouter';
+        _wizProvider = { name, label: name, type: 'cloud', api_key: key };
+    }
+    wizStep(2);
+}
+
+function wizPopulateVibeTools() {
+    const container = document.getElementById('wiz-vibe-tools');
+    if (container.dataset.populated === 'true') return;
+    if (!_wizData) return;
+    container.dataset.populated = 'true';
+    const d = _wizData;
+    if (!d || !d.vibe_tools) { container.innerHTML = '<div class="wiz-empty">No tools available.</div>'; return; }
+
+    // Sort: installed (high/medium) first, then low, then not installed
+    const confRank = {high: 3, medium: 2, low: 1, '': 0};
+    const sorted = [...d.vibe_tools].sort((a, b) => {
+        const aR = a.installed ? confRank[a.confidence] || 0 : -1;
+        const bR = b.installed ? confRank[b.confidence] || 0 : -1;
+        return bR - aR;
+    });
+
+    _wizVibeTools = [];
+    let html = '';
+    let section = '';
+    for (const t of sorted) {
+        const isDetected = t.installed && t.confidence !== 'low';
+        const isMaybe = t.installed && t.confidence === 'low';
+
+        // Group labels
+        const newSection = isDetected ? 'detected' : (isMaybe ? 'maybe' : 'available');
+        if (newSection !== section) {
+            section = newSection;
+            if (section === 'detected') html += '<div class="wiz-group-label">Detected on your machine</div>';
+            else if (section === 'maybe') html += '<div class="wiz-group-label">Possibly installed</div>';
+            else html += '<div class="wiz-group-label">Available to install</div>';
+        }
+
+        const icon = _vibeIcons[t.name] || '&#x1F527;';
+        const badge = '<span class="wiz-badge ' + esc(t.category) + '">' + esc(t.category) + '</span>';
+
+        let detail = '';
+        if (isDetected) {
+            detail = t.version ? 'v' + t.version : (t.path ? t.path.split(/[/\\]/).pop() : t.how_to_use);
+            _wizVibeTools.push(t);
+        } else if (isMaybe) {
+            detail = 'Config found, binary not';
+        } else {
+            detail = t.how_to_use || 'Not installed';
+        }
+
+        const cls = isDetected ? 'wiz-item detected selected' : 'wiz-item';
+        _wizVibeMap[t.name] = t;
+        html += '<div class="' + cls + '" data-tool="' + esc(t.name) + '" onclick="wizToggleVibeTool(this)">' +
+            '<div class="wiz-check">&#x2713;</div>' +
+            '<div class="wiz-icon">' + icon + '</div>' +
+            '<div class="wiz-info"><div class="wiz-name">' + esc(t.label) + '</div>' +
+            '<div class="wiz-detail">' + esc(detail || '') + '</div></div>' +
+            badge + '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function wizToggleVibeTool(el) {
+    el.classList.toggle('selected');
+    // Rebuild _wizVibeTools from selected items
+    _wizVibeTools = [];
+    document.querySelectorAll('#wiz-vibe-tools .wiz-item.selected').forEach(item => {
+        const t = _wizVibeMap[item.dataset.tool];
+        if (t) _wizVibeTools.push(t);
+    });
+}
+
+function wizPopulateSummary() {
+    const d = _wizData;
+    const env = d ? d.environment : {};
+
+    // Environment grid
+    const grid = document.getElementById('wiz-env-grid');
+    grid.innerHTML =
+        '<div class="wiz-env-item"><div class="wiz-env-label">OS</div><div class="wiz-env-val">' + esc(env.os || '?') + ' ' + esc(env.arch || '') + '</div></div>' +
+        '<div class="wiz-env-item"><div class="wiz-env-label">Docker</div><div class="wiz-env-val">' + (env.docker ? '<span style="color:var(--green)">Available</span>' : '<span style="color:var(--text2)">Not available</span>') + '</div></div>' +
+        '<div class="wiz-env-item"><div class="wiz-env-label">Memory</div><div class="wiz-env-val">' + (env.memory_mb ? Math.round(env.memory_mb / 1024) + ' GB' : '?') + '</div></div>' +
+        '<div class="wiz-env-item"><div class="wiz-env-label">Internet</div><div class="wiz-env-val">' + (env.internet ? '<span style="color:var(--green)">Connected</span>' : '<span style="color:var(--red)">Offline</span>') + '</div></div>';
+
+    // Summary
+    const summary = document.getElementById('wiz-summary');
+    let rows = '';
+    // Provider
+    const provLabel = _wizProvider ? _wizProvider.label : '<span style="color:var(--text2)">None selected</span>';
+    rows += '<div class="wiz-summary-row"><span class="label">LLM Provider</span><span class="value">' + provLabel + '</span></div>';
+    // Vibe tools
+    const vibeLabels = _wizVibeTools.map(t => t.label).join(', ') || '<span style="color:var(--text2)">None</span>';
+    rows += '<div class="wiz-summary-row"><span class="label">Vibe Coding Tools</span><span class="value">' + vibeLabels + '</span></div>';
+    // Strategy
+    const strat = {docker: 'Docker Compose', apt_install: 'Direct Install', pip_python: 'Python/pip', minimal: 'Minimal'};
+    rows += '<div class="wiz-summary-row"><span class="label">Deploy Strategy</span><span class="value">' + (strat[env.strategy] || env.strategy || '?') + '</span></div>';
+    if (env.in_container) {
+        rows += '<div class="wiz-summary-row"><span class="label">Container</span><span class="value"><span style="color:var(--cyan)">Running inside container</span></span></div>';
+    }
+    summary.innerHTML = rows;
+}
+
+async function wizFinish() {
+    // Save selections to backend
+    const body = {
+        provider: _wizProvider,
+        vibe_tools: _wizVibeTools,
+        preferred_vibe_tool: _wizVibeTools.length > 0 ? _wizVibeTools[0].name : null,
+    };
+    try {
+        await fetch('/api/wizard/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+    } catch(e) {
+        console.error('Wizard save failed:', e);
+    }
+    // Hide wizard, show desktop
+    document.getElementById('wizard-overlay').classList.remove('active');
+    refreshDesktop();
 }
 fetchJSON('/api/settings').then(s => {
     if (s && !s.has_api_key) document.getElementById('key-pulse').style.background = 'var(--yellow)';
@@ -4504,7 +5292,8 @@ async function updateNudgeBanner() {
 /* ═══════════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════════ */
-wizardCheck();
+// Wizard runs in isolated async context so other boot errors can't kill it
+(async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();
 refreshDesktop();
 updateNudgeBanner();
 setInterval(updateNudgeBanner, 30000);

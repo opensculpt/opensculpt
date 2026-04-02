@@ -134,7 +134,11 @@ class OSAgent:
         self._max_cache = 100
         # Session token tracking
         self._session_tokens = 0
+        self._session_input_tokens = 0
+        self._session_output_tokens = 0
         self._session_requests = 0
+        self._session_cost_usd = 0.0
+        self._lifetime_cost = self._load_lifetime_cost()
         self._register_tools()
 
         # Wrap with sandbox if configured
@@ -586,6 +590,7 @@ class OSAgent:
                         tools = all_tools
                         continue
                 tokens += resp.input_tokens + resp.output_tokens
+                self._track_usage(resp.input_tokens, resp.output_tokens)
 
                 if resp.content:
                     await self._bus.emit("os.thinking", {
@@ -730,7 +735,7 @@ class OSAgent:
                     # DemandCollector can diagnose what actually went wrong
                     _preview = out[:200]
                     if not _real_ok:
-                        _args_str = _trunc_args(tc.arguments)[:120]
+                        _args_str = str(_trunc_args(tc.arguments))[:120]
                         _preview = f"args={_args_str} | {out[:150]}"
                     await self._bus.emit("os.tool_result", {
                         "turn": turns, "tool": tc.name,
@@ -878,8 +883,12 @@ class OSAgent:
                     del self._response_cache[oldest]
 
             # Track session stats
-            self._session_tokens += tokens
             self._session_requests += 1
+            # Persist cost to disk every command
+            try:
+                self._save_lifetime_cost()
+            except Exception:
+                pass
 
             # ── LEARNER: Auto-record to all 3 knowledge weaves ──
             if hasattr(self, '_learner') and self._learner:
@@ -918,6 +927,74 @@ class OSAgent:
                 "command": command[:200], "error": str(e)[:300],
             }, source="os_agent")
             return _reply(False, "error", f"Failed: {e}")
+
+    # ── Cost tracking ────────────────────────────────────────────
+
+    # Per-million-token pricing (USD). Input / Output.
+    _MODEL_PRICING = {
+        # Anthropic
+        "claude-haiku-4-5-20251001": (1.00, 5.00),
+        "claude-sonnet-4-20250514": (3.00, 15.00),
+        "claude-opus-4-20250514": (15.00, 75.00),
+        # OpenRouter Anthropic
+        "anthropic/claude-3.5-haiku": (0.80, 4.00),
+        "anthropic/claude-sonnet-4": (3.00, 15.00),
+        "anthropic/claude-opus-4": (15.00, 75.00),
+        # OpenAI
+        "gpt-4o": (2.50, 10.00),
+        "gpt-4o-mini": (0.15, 0.60),
+        "gpt-4.1": (2.00, 8.00),
+        "gpt-4.1-mini": (0.40, 1.60),
+        # Groq
+        "llama-3.3-70b-versatile": (0.59, 0.79),
+        # DeepSeek
+        "deepseek-chat": (0.27, 1.10),
+        # Google
+        "gemini-2.5-flash": (0.15, 0.60),
+        "gemini-2.5-pro": (1.25, 10.00),
+        # Fallback
+        "_default": (1.00, 5.00),
+    }
+
+    def _calc_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """Calculate USD cost from actual token counts."""
+        model = getattr(self._llm, 'model', '') if self._llm else ''
+        pricing = self._MODEL_PRICING.get(model, self._MODEL_PRICING["_default"])
+        input_cost = (input_tokens / 1_000_000) * pricing[0]
+        output_cost = (output_tokens / 1_000_000) * pricing[1]
+        return input_cost + output_cost
+
+    def _load_lifetime_cost(self) -> dict:
+        """Load accumulated cost from .opensculpt/cost.json."""
+        import json
+        from pathlib import Path
+        cost_path = Path(".opensculpt/cost.json")
+        if cost_path.exists():
+            try:
+                return json.loads(cost_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {"total_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
+
+    def _save_lifetime_cost(self) -> None:
+        """Persist accumulated cost to disk — survives restart."""
+        import json
+        from pathlib import Path
+        cost_path = Path(".opensculpt/cost.json")
+        cost_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lifetime_cost["total_usd"] += self._session_cost_usd
+        self._lifetime_cost["input_tokens"] += self._session_input_tokens
+        self._lifetime_cost["output_tokens"] += self._session_output_tokens
+        self._lifetime_cost["requests"] += self._session_requests
+        cost_path.write_text(json.dumps(self._lifetime_cost, indent=2), encoding="utf-8")
+
+    def _track_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Track token usage and cost for a single LLM call."""
+        cost = self._calc_cost(input_tokens, output_tokens)
+        self._session_input_tokens += input_tokens
+        self._session_output_tokens += output_tokens
+        self._session_tokens += input_tokens + output_tokens
+        self._session_cost_usd += cost
 
     # ── Tool registration ────────────────────────────────────────
 
@@ -1624,6 +1701,7 @@ RULES:
                     self._sub_agents[name]["result"] = "(LLM returned empty after 3 retries)"
                     break
                 _total_tokens += resp.input_tokens + resp.output_tokens
+                self._track_usage(resp.input_tokens, resp.output_tokens)
 
                 if not resp.tool_calls:
                     self._sub_agents[name]["status"] = "done"
