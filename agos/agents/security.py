@@ -26,8 +26,16 @@ SRC = pathlib.Path("/app/agos")
 if not SRC.exists():
     SRC = pathlib.Path("agos")
 
-EVOLVED_DIR = pathlib.Path(".agos/evolved")
-COMMUNITY_DIR = pathlib.Path(".agos/community/evolved")
+def _get_evolved_dir() -> pathlib.Path:
+    from agos.config import settings
+    return pathlib.Path(settings.workspace_dir) / "evolved"
+
+def _get_community_dir() -> pathlib.Path:
+    from agos.config import settings
+    return pathlib.Path(settings.workspace_dir) / "community" / "evolved"
+
+EVOLVED_DIR = _get_evolved_dir()
+COMMUNITY_DIR = _get_community_dir()
 
 # ── Dangerous AST patterns that sandbox-bypass attacks use ─────
 

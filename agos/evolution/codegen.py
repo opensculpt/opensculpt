@@ -28,8 +28,12 @@ from agos.evolution.sandbox import Sandbox, SandboxResult
 
 logger = logging.getLogger(__name__)
 
-# Where evolved code lives (inside the persistent .agos workspace)
-EVOLVED_DIR = Path(".agos/evolved")
+# Where evolved code lives — aligned with settings.workspace_dir
+def _get_evolved_dir() -> Path:
+    from agos.config import settings
+    return Path(settings.workspace_dir) / "evolved"
+
+EVOLVED_DIR = _get_evolved_dir()  # default; functions below re-read at call time
 
 # Module -> component attribute mapping for wiring evolved code
 # Keys are agos_module targets, values are (registry_key, method_pairs)

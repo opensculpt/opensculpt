@@ -214,14 +214,16 @@ class TestSandboxGate:
 
         sandbox = Sandbox(timeout=10)
 
-        with patch("agos.evolution.community.pathlib.Path") as mock_path_fn:
+        with patch("agos.evolution.community.pathlib.Path") as mock_path_fn, \
+             patch("agos.config.settings") as mock_settings:
+            mock_settings.workspace_dir = tmp_path / ".opensculpt"
+            (tmp_path / ".opensculpt" / "evolved").mkdir(parents=True, exist_ok=True)
+
             def path_factory(p):
                 if p == "community/contributions":
                     return tmp_path / "community" / "contributions"
                 if p == "community/evolved":
                     return tmp_path / "community" / "evolved"
-                if p == ".agos/evolved":
-                    return local_evolved
                 return tmp_path / p
 
             mock_path_fn.side_effect = path_factory
@@ -231,7 +233,7 @@ class TestSandboxGate:
             )
 
         assert n == 0
-        assert not (local_evolved / "evil.py").exists()
+        assert not (tmp_path / ".opensculpt" / "evolved" / "evil.py").exists()
 
     @pytest.mark.asyncio
     async def test_community_gate_accepts_safe_file(self, tmp_path):
@@ -245,7 +247,7 @@ class TestSandboxGate:
             encoding="utf-8",
         )
 
-        local_evolved = tmp_path / ".agos" / "evolved"
+        local_evolved = tmp_path / ".opensculpt" / "evolved"
         local_evolved.mkdir(parents=True)
 
         mock_loom = MagicMock()
@@ -256,14 +258,15 @@ class TestSandboxGate:
 
         sandbox = Sandbox(timeout=10)
 
-        with patch("agos.evolution.community.pathlib.Path") as mock_path_fn:
+        with patch("agos.evolution.community.pathlib.Path") as mock_path_fn, \
+             patch("agos.config.settings") as mock_settings:
+            mock_settings.workspace_dir = tmp_path / ".opensculpt"
+
             def path_factory(p):
                 if p == "community/contributions":
                     return tmp_path / "community" / "contributions"
                 if p == "community/evolved":
                     return tmp_path / "community" / "evolved"
-                if p == ".agos/evolved":
-                    return local_evolved
                 return tmp_path / p
 
             mock_path_fn.side_effect = path_factory

@@ -37,7 +37,11 @@ from agos.evolution.sandbox import Sandbox, SandboxResult
 
 _logger = logging.getLogger(__name__)
 
-EVOLVED_ROOT = Path(".agos/evolved")
+def _get_evolved_root() -> Path:
+    from agos.config import settings
+    return Path(settings.workspace_dir) / "evolved"
+
+EVOLVED_ROOT = _get_evolved_root()
 
 
 # ── Base contract (same as IntegrationStrategy) ─────────────

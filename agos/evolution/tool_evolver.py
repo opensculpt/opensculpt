@@ -12,8 +12,8 @@ Evolution sources:
 Lifecycle of an evolved tool:
     observe() → propose() → generate() → sandbox() → deploy() → share()
 
-All evolved tools are stored as .py files in .agos/evolved/tools/ and
-hot-loaded into the running ToolRegistry without restart.
+All evolved tools are stored as .py files in .opensculpt/evolved/tools/
+(settings.workspace_dir) and hot-loaded into the running ToolRegistry without restart.
 """
 
 from __future__ import annotations
@@ -37,10 +37,19 @@ from agos.tools.schema import ToolSchema, ToolParameter
 
 _logger = logging.getLogger(__name__)
 
-# Where evolved capabilities live
-EVOLVED_TOOLS_DIR = Path(".agos/evolved/tools")
-EVOLVED_CHANNELS_DIR = Path(".agos/evolved/channels")
-EVOLVED_PROVIDERS_DIR = Path(".agos/evolved/providers")
+# Where evolved capabilities live — aligned with settings.workspace_dir
+# so OS Agent and ToolEvolver read/write the same directory.
+def _evolved_tools_dir() -> Path:
+    from agos.config import settings
+    return Path(settings.workspace_dir) / "evolved" / "tools"
+
+def _evolved_channels_dir() -> Path:
+    from agos.config import settings
+    return Path(settings.workspace_dir) / "evolved" / "channels"
+
+def _evolved_providers_dir() -> Path:
+    from agos.config import settings
+    return Path(settings.workspace_dir) / "evolved" / "providers"
 
 # Template for generating new tools
 _TOOL_TEMPLATE = '''"""Evolved tool: {name} — {description}
@@ -140,7 +149,7 @@ class ToolEvolver:
         self._sandbox = Sandbox()
 
         # Ensure directories exist
-        for d in (EVOLVED_TOOLS_DIR, EVOLVED_CHANNELS_DIR, EVOLVED_PROVIDERS_DIR):
+        for d in (_evolved_tools_dir(), _evolved_channels_dir(), _evolved_providers_dir()):
             d.mkdir(parents=True, exist_ok=True)
 
     # ── 1. OBSERVE — detect what's needed ────────────────────
@@ -517,7 +526,7 @@ async def handler(param1: str, param2: str = "") -> str:
                                 need.name, pattern)
                 return False
 
-        file_path = EVOLVED_TOOLS_DIR / f"{need.name}.py"
+        file_path = _evolved_tools_dir() / f"{need.name}.py"
 
         # Don't overwrite if unchanged
         code_hash = hashlib.sha256(code.encode()).hexdigest()[:12]
@@ -665,17 +674,18 @@ async def handler(param1: str, param2: str = "") -> str:
     async def load_existing(self) -> int:
         """Load all previously evolved tools from disk."""
         count = 0
-        if not EVOLVED_TOOLS_DIR.exists():
+        tools_dir = _evolved_tools_dir()
+        if not tools_dir.exists():
             return 0
 
-        for file_path in sorted(EVOLVED_TOOLS_DIR.glob("*.py")):
+        for file_path in sorted(tools_dir.glob("*.py")):
             if file_path.name.startswith("_"):
                 continue
             if self._load_tool_from_file(file_path):
                 count += 1
 
         if count:
-            _logger.info("Loaded %d evolved tools from %s", count, EVOLVED_TOOLS_DIR)
+            _logger.info("Loaded %d evolved tools from %s", count, tools_dir)
         return count
 
     # ── Status ───────────────────────────────────────────────

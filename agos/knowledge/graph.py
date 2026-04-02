@@ -4,7 +4,7 @@ Not just "what happened" or "what we know" — but HOW things connect.
 Users, projects, files, concepts, agents — all linked in a graph
 that agents can traverse to understand context.
 
-Example: "user:abhis" --[works_on]--> "project:agos" --[uses]--> "tool:claude"
+Example: "user:alice" --[works_on]--> "project:agos" --[uses]--> "tool:claude"
          "file:agent.py" --[defines]--> "class:Agent" --[depends_on]--> "class:StateMachine"
 """
 
@@ -53,7 +53,7 @@ class Edge:
 class KnowledgeGraph:
     """Graph of entity relationships. SQLite-backed.
 
-    Entities are strings (e.g., "user:abhis", "file:agent.py").
+    Entities are strings (e.g., "user:alice", "file:agent.py").
     Relations are labeled edges (e.g., "works_on", "depends_on").
     Agents can traverse the graph to understand context and connections.
     """

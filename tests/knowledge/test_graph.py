@@ -17,10 +17,10 @@ async def graph():
 
 @pytest.mark.asyncio
 async def test_link_and_connections(graph):
-    await graph.link("user:abhis", "works_on", "project:agos")
-    await graph.link("user:abhis", "uses", "tool:claude")
+    await graph.link("user:alice", "works_on", "project:agos")
+    await graph.link("user:alice", "uses", "tool:claude")
 
-    conns = await graph.connections("user:abhis")
+    conns = await graph.connections("user:alice")
     assert len(conns) == 2
     targets = {c.target for c in conns}
     assert "project:agos" in targets

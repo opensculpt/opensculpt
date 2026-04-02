@@ -109,7 +109,8 @@ async def load_community_contributions(
     code_loaded = 0
     code_rejected = 0
     if evolved_dir.exists():
-        local_evolved = pathlib.Path(".agos/evolved")
+        from agos.config import settings
+        local_evolved = pathlib.Path(settings.workspace_dir) / "evolved"
         local_evolved.mkdir(parents=True, exist_ok=True)
 
         # Create sandbox for community code validation
