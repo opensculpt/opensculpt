@@ -1,6 +1,6 @@
 [project]
 name = "opensculpt"
-version = "0.1.4"
+version = "0.1.5"
 description = "OpenSculpt — The Self-Evolving Agentic OS"
 readme = "README.md"
 authors = [{name = "Abhishek M Shivalingaiah"}]
