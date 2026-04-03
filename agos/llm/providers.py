@@ -117,7 +117,7 @@ class _OpenAICompatible(BaseLLMProvider):
                     raise RuntimeError(f"LLM provider returned non-JSON: {resp.text[:300]}")
                 break
             else:
-                raise RuntimeError(f"LLM provider rate limited after 5 retries")
+                raise RuntimeError("LLM provider rate limited after 5 retries")
         if data is None:
             raise RuntimeError("LLM provider returned no data")
 
@@ -694,9 +694,14 @@ ALL_PROVIDERS: dict[str, type[BaseLLMProvider]] = {
 # ── Config fields for setup UI ──────────────────────────────
 
 _API_KEY_FIELD = {"key": "api_key", "label": "API Key", "type": "password", "required": True}
-_MODEL_FIELD = lambda default: {"key": "model", "label": "Model", "type": "text", "default": default}
-_MODEL_SELECT = lambda default, options: {"key": "model", "label": "Model", "type": "select", "default": default, "options": options}
-_BASE_URL_FIELD = lambda default: {"key": "base_url", "label": "Base URL", "type": "text", "default": default}
+def _MODEL_FIELD(default):
+    return {"key": "model", "label": "Model", "type": "text", "default": default}
+
+def _MODEL_SELECT(default, options):
+    return {"key": "model", "label": "Model", "type": "select", "default": default, "options": options}
+
+def _BASE_URL_FIELD(default):
+    return {"key": "base_url", "label": "Base URL", "type": "text", "default": default}
 
 _PROVIDER_CONFIG_FIELDS: dict[str, list[dict]] = {
     # Anthropic (native API)

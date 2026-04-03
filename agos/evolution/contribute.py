@@ -13,13 +13,11 @@ validation on one instance becomes available to all other instances.
 
 from __future__ import annotations
 
-import json
 import base64
 from datetime import datetime
 
 import httpx
 
-from agos.config import settings
 
 GITHUB_API = "https://api.github.com"
 
@@ -50,7 +48,6 @@ async def share_knowledge(
     Raises ContributionError on failure.
     """
     import hashlib
-    from pathlib import Path
 
     owner = UPSTREAM_OWNER
     repo = UPSTREAM_REPO

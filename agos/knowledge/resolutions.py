@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-import aiosqlite
 
 from agos.knowledge import db as _db
 
@@ -367,7 +366,7 @@ class ResolutionCache:
 
     async def prune(self, max_age_days: int = 90, min_confidence: float = 0.1) -> int:
         """Remove stale resolutions. Returns count pruned."""
-        cutoff = datetime.now().isoformat()  # Simplified — decay by confidence
+        _cutoff = datetime.now().isoformat()  # Simplified — decay by confidence
         async with _db.connect(self._db_path) as conn:
             result = await conn.execute(
                 "DELETE FROM resolutions WHERE confidence < ? AND source = 'federated'",

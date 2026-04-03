@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import urllib.parse
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agos.channels.base import ChannelRegistry
 
 import httpx
 
@@ -557,7 +560,8 @@ class SentryChannel(BaseChannel):
         key = parsed.username or ""
         host = parsed.hostname or ""
         store_url = f"https://{host}/api/{project_id}/store/"
-        import time, uuid
+        import time
+        import uuid
         async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
             r = await c.post(store_url,
                 headers={"X-Sentry-Auth": f"Sentry sentry_version=7,sentry_key={key}"},

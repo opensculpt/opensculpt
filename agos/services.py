@@ -12,7 +12,7 @@ import logging
 import re
 import subprocess
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -457,7 +457,7 @@ class ServiceKeeper:
             port_output = ""
             try:
                 ps_result = subprocess.run(
-                    f"ps aux 2>/dev/null | head -30", shell=True,
+                    "ps aux 2>/dev/null | head -30", shell=True,
                     capture_output=True, text=True, timeout=5
                 )
                 ps_output = ps_result.stdout[:1000]
@@ -588,7 +588,7 @@ TOOLS: shell, read_file, write_file, http, python
                 "url": f"http://localhost:{card.port}" if card.port else "",
             }
             # Extract credentials from body
-            creds = {}
+            _creds = {}  # noqa: F841
             for line in card.body.split('\n'):
                 if 'login' in line.lower() or 'password' in line.lower() or 'credential' in line.lower():
                     d["credentials_hint"] = line.strip().lstrip('- *')

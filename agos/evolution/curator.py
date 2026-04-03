@@ -21,11 +21,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agos.evolution.scoring import ArtifactScore, FleetScorer, LocalScorer
 
 _logger = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ def _count_lines(text: str, prefix: str = "") -> int:
         return 0
     if prefix:
         return sum(1 for line in text.split("\n") if line.strip().startswith(prefix))
-    return len([l for l in text.split("\n") if l.strip()])
+    return len([line for line in text.split("\n") if line.strip()])
 
 
 class NodeReport:
@@ -121,15 +119,15 @@ def generate_fleet_report(fleet_dir: Path) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     lines = [
-        f"# OpenSculpt Fleet Report",
-        f"",
+        "# OpenSculpt Fleet Report",
+        "",
         f"Generated: {now}",
         f"Nodes: {len(nodes)}",
-        f"",
-        f"## Per-Node Summary",
-        f"",
-        f"| Node                 | Cycles | Resolved     | Tools | Skills | Constraints | Resolutions |",
-        f"|----------------------|--------|--------------|-------|--------|-------------|-------------|",
+        "",
+        "## Per-Node Summary",
+        "",
+        "| Node                 | Cycles | Resolved     | Tools | Skills | Constraints | Resolutions |",
+        "|----------------------|--------|--------------|-------|--------|-------------|-------------|",
     ]
     for n in nodes:
         lines.append(n.summary_line())
@@ -312,17 +310,17 @@ def create_release(
     # Write changelog
     changelog = [
         f"# Release v{version}",
-        f"",
+        "",
         f"Created: {manifest['created_at']}",
         f"Nodes: {len(nodes)}",
-        f"",
-        f"## Contents",
+        "",
+        "## Contents",
         f"- {len(tools_included)} evolved tools",
         f"- {len(skills_included)} skill documents",
         f"- {len(all_constraints)} constraints",
         f"- {len(all_resolutions)} resolution patterns",
-        f"",
-        f"## Top Artifacts",
+        "",
+        "## Top Artifacts",
     ]
     for a in artifacts[:10]:
         score = a["score"].get("composite", 0) if isinstance(a["score"], dict) else a["score"]

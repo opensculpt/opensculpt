@@ -183,11 +183,11 @@ class DemandCollector:
             }
             for cmd, (tool_name, desc) in _missing_patterns.items():
                 if (f"'{cmd}' is not recognized" in preview_lower
-                        or f"command not found" in preview_lower
-                        or f"not found" in preview_lower
-                        or f"failed to connect" in preview_lower
-                        or f"cannot find" in preview_lower
-                        or f"is not installed" in preview_lower) and cmd in preview_lower:
+                        or "command not found" in preview_lower
+                        or "not found" in preview_lower
+                        or "failed to connect" in preview_lower
+                        or "cannot find" in preview_lower
+                        or "is not installed" in preview_lower) and cmd in preview_lower:
                     self._add_signal(
                         key=f"missing_tool:{tool_name}",
                         kind="missing_tool",
@@ -201,7 +201,7 @@ class DemandCollector:
         """User command completed — check for quality signals."""
         tokens = event.data.get("tokens", 0)
         turns = event.data.get("turns", 0)
-        steps = event.data.get("steps", 0)
+        _steps = event.data.get("steps", 0)
 
         # High token usage = LLM struggling with the task
         if tokens > 50_000:
@@ -250,7 +250,7 @@ class DemandCollector:
         }
 
         for cmd in workarounds:
-            desc = _tool_descriptions.get(cmd, f"Native {cmd} tool for the OS")
+            _desc = _tool_descriptions.get(cmd, f"Native {cmd} tool for the OS")
             self._add_signal(
                 key=f"capability_gap:{cmd}",
                 kind="missing_tool",
@@ -391,9 +391,9 @@ class DemandCollector:
         if event.data.get("status") != "done":
             return
         phase = event.data.get("phase", "")
-        goal_id = event.data.get("goal_id", "")
+        _goal_id = event.data.get("goal_id", "")
         # Clear any phase_fail demands for this phase — evolution worked
-        cleared = self.clear_resolved(f"phase_fail:")
+        cleared = self.clear_resolved("phase_fail:")
         if cleared > 0:
             _logger.info("Phase '%s' succeeded — cleared %d evolution demands", phase, cleared)
 
@@ -456,7 +456,7 @@ class DemandCollector:
     def _classify_error(self, command: str, error: str) -> tuple[str, str, float]:
         """Classify an OS error into a demand signal type."""
         error_lower = error.lower()
-        cmd_lower = command.lower()
+        _cmd_lower = command.lower()
 
         # Missing capability signals
         missing_kw = ["not found", "no such", "doesn't exist", "cannot find",

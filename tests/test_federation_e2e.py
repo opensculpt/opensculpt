@@ -5,7 +5,6 @@ No mocks except for demand collector (which needs live EventBus to populate).
 """
 
 import json
-import shutil
 import time
 from pathlib import Path
 
@@ -327,7 +326,7 @@ class TestCreateRelease:
         from agos.evolution.curator import create_release
         output = Path(".opensculpt/releases")
         # Count existing versions
-        existing = list(output.glob("v*")) if output.exists() else []
+        _existing = list(output.glob("v*")) if output.exists() else []
         release_dir = create_release(fleet_dir, output_dir=output, min_score=0.0)
         assert release_dir.exists()
         assert (release_dir / "manifest.json").exists()

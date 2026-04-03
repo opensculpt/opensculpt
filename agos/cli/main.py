@@ -1281,9 +1281,6 @@ def verify():
         sculpt verify
     """
     import subprocess
-    import json as _json
-    from pathlib import Path
-    from agos.config import settings
     from agos.evolution.nudge import get_demand_count, write_demands_md
 
     # Step 1: Run tests

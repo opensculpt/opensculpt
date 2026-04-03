@@ -12,8 +12,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -566,7 +564,7 @@ async def _git_diff(path: str = ".", staged: bool = False) -> str:
 
 async def _git_log(path: str = ".", count: int = 10) -> str:
     proc = await asyncio.create_subprocess_exec(
-        "git", "log", f"--oneline", f"-{count}", cwd=path,
+        "git", "log", "--oneline", f"-{count}", cwd=path,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, _ = await proc.communicate()
     return out.decode(errors="replace") or "(no commits)"

@@ -6,7 +6,6 @@ actually exercise the fixes against the running container.
 Run: python -m pytest tests/test_fixes_e2e.py -v -x --timeout=120
 Requires: container running on port 8420 with OpenRouter configured.
 """
-import asyncio
 import json
 import time
 import urllib.request
@@ -28,7 +27,7 @@ def api(path, method="GET", body=None, timeout=30):
     try:
         resp = urllib.request.urlopen(req, timeout=timeout)
         return json.loads(resp.read())
-    except Exception as e:
+    except Exception:
         return None
 
 

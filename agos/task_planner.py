@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 _logger = logging.getLogger(__name__)
 

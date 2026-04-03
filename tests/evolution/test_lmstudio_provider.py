@@ -1,7 +1,7 @@
 """Tests for LM Studio OpenAI-compatible provider."""
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from agos.evolution.providers.lmstudio_provider import (
     LMStudioProvider,

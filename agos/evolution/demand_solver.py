@@ -15,16 +15,13 @@ Failed attempts produce specific reflections (Reflexion pattern).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
 from pathlib import Path
-from typing import Any
 
 from agos.events.bus import EventBus
-from agos.policy.audit import AuditTrail, AuditEntry
+from agos.policy.audit import AuditTrail
 from agos.evolution.demand import DemandCollector, DemandSignal
 from agos.evolution.state import EvolutionMemory, EvolutionInsight
 

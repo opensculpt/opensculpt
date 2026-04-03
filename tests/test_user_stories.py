@@ -6,7 +6,6 @@ Run with: python -m pytest tests/test_user_stories.py -v
 Requires the server to be running on port 8420.
 """
 import json
-import time
 
 import pytest
 from playwright.sync_api import sync_playwright

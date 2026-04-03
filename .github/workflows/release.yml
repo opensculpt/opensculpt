@@ -35,21 +35,21 @@ jobs:
           name: opensculpt-windows
           path: dist/OpenSculpt.exe
 
-  # publish-pypi:  # Uncomment when PyPI project is created
-  #   needs: [build-wheel]
-  #   runs-on: ubuntu-latest
-  #   environment: pypi
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         name: dist
-  #         path: dist/
-  #     - uses: pypa/gh-action-pypi-publish@release/v1
+  publish-pypi:
+    needs: [build-wheel]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: [build-wheel, build-exe]
+    needs: [build-wheel, build-exe, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write

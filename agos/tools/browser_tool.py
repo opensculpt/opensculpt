@@ -6,7 +6,6 @@ with web applications (CRM setup, dashboards, admin panels).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ async def _ensure_browser():
         _page = await _browser.new_page()
         _page.set_default_timeout(15000)
         return _page
-    except Exception as e:
+    except Exception:
         return None
 
 

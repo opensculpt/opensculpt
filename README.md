@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/opensculpt/opensculpt/stargazers"><img src="https://img.shields.io/github/stars/opensculpt/opensculpt?style=social" alt="GitHub Stars"></a>
-  <!-- <a href="https://pypi.org/project/opensculpt/"><img src="https://img.shields.io/pypi/v/opensculpt" alt="PyPI version"></a> -->
+  <a href="https://pypi.org/project/opensculpt/"><img src="https://img.shields.io/pypi/v/opensculpt" alt="PyPI version"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="https://github.com/opensculpt/opensculpt/actions"><img src="https://img.shields.io/github/actions/workflow/status/opensculpt/opensculpt/ci.yml?label=tests" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License"></a>
@@ -30,9 +30,33 @@ sculpt "write a REST API for user management with tests and docs"
 # → Assembles a team: architect → coder → [tester + documenter in parallel]
 ```
 
+## Try It Free
+
+**No install needed** — explore OpenSculpt directly in your browser:
+
+| Method | What you get | Time to start |
+|--------|-------------|---------------|
+| [![Open in Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/OpenSculpt/opensculpt?quickstart=1) | Full dev environment + dashboard auto-launches on port 8420 | ~60s |
+| [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/OpenSculpt/opensculpt) | Same setup via Gitpod | ~90s |
+
+> GitHub Codespaces gives **120 free core-hours/month** on every GitHub account — enough to explore for days.
+
+Once the Codespace starts, the dashboard opens automatically. Set your API key in the terminal to unlock the full OS:
+
+```bash
+export SCULPT_LLM_API_KEY=your-key-here
+sculpt "analyze this codebase"
+```
+
 ## Install
 
-### From Source (recommended)
+### pip
+
+```bash
+pip install opensculpt
+```
+
+### From Source
 
 ```bash
 git clone https://github.com/opensculpt/opensculpt.git
@@ -42,15 +66,9 @@ pip install -e ".[dev]"
 
 > **Note:** If `sculpt` isn't found after install, use `python -m agos` instead.
 
-<!-- ### pip (coming soon — not yet published to PyPI)
-```bash
-pip install opensculpt
-```
--->
+### Windows Executable
 
-<!-- ### Windows Executable (coming soon — build currently broken)
 Download `OpenSculpt.exe` from the [latest release](https://github.com/opensculpt/opensculpt/releases/latest).
--->
 
 ## Quick Start
 

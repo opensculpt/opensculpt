@@ -18,7 +18,6 @@ import json
 import subprocess
 import time
 
-import pytest
 import requests
 
 BASE = "http://localhost:8420"
@@ -146,7 +145,7 @@ class TestServicesAPI:
 
 class TestStopService:
     def test_stop_api_returns_ok(self):
-        result = post_api(f"/api/services/Notes%20API/stop")
+        result = post_api("/api/services/Notes%20API/stop")
         assert result is not None
         assert result.get("ok") is True, f"Stop returned: {result}"
 
@@ -155,17 +154,17 @@ class TestStopService:
         up, _ = curl_notes()
         if not up:
             # Restart it first
-            post_api(f"/api/services/Notes%20API/restart")
+            post_api("/api/services/Notes%20API/restart")
             assert wait_for_condition(lambda: curl_notes()[0], timeout=60, desc="Notes API start")
 
         # Now stop it
-        post_api(f"/api/services/Notes%20API/stop")
+        post_api("/api/services/Notes%20API/stop")
         time.sleep(3)
         up, _ = curl_notes()
         assert not up, "Notes API still responding after stop"
 
     def test_stop_updates_card_status(self):
-        post_api(f"/api/services/Notes%20API/stop")
+        post_api("/api/services/Notes%20API/stop")
         time.sleep(2)
         data = api("/api/services")
         notes = [s for s in data["services"] if s.get("port") == NOTES_PORT]
@@ -177,19 +176,19 @@ class TestStopService:
 
 class TestRestartService:
     def test_restart_api_returns_ok(self):
-        result = post_api(f"/api/services/Notes%20API/restart")
+        result = post_api("/api/services/Notes%20API/restart")
         assert result is not None
         assert result.get("ok") is True
 
     def test_restart_brings_service_back(self):
         # Stop first
-        post_api(f"/api/services/Notes%20API/stop")
+        post_api("/api/services/Notes%20API/stop")
         time.sleep(3)
         up, _ = curl_notes()
         assert not up, "Service should be down before restart test"
 
         # Restart
-        post_api(f"/api/services/Notes%20API/restart")
+        post_api("/api/services/Notes%20API/restart")
 
         # Wait for ServiceKeeper (30s tick + startup time)
         restored = wait_for_condition(
@@ -203,7 +202,7 @@ class TestRestartService:
     def test_restart_preserves_data(self):
         # Make sure service is up with data
         if not curl_notes()[0]:
-            post_api(f"/api/services/Notes%20API/restart")
+            post_api("/api/services/Notes%20API/restart")
             wait_for_condition(lambda: curl_notes()[0], timeout=90)
 
         # Check data before
@@ -212,9 +211,9 @@ class TestRestartService:
         assert len(before_data) > 0, "No notes in database before restart"
 
         # Stop + restart
-        post_api(f"/api/services/Notes%20API/stop")
+        post_api("/api/services/Notes%20API/stop")
         time.sleep(3)
-        post_api(f"/api/services/Notes%20API/restart")
+        post_api("/api/services/Notes%20API/restart")
         wait_for_condition(lambda: curl_notes()[0], timeout=90)
 
         # Check data after
@@ -231,7 +230,7 @@ class TestServiceKeeperAutoRestart:
     def test_kill_process_triggers_restart(self):
         """Kill the Flask process directly — ServiceKeeper should detect and restart."""
         # Ensure running — use restart API to reset card status to healthy first
-        post_api(f"/api/services/Notes%20API/restart")
+        post_api("/api/services/Notes%20API/restart")
         assert wait_for_condition(lambda: curl_notes()[0], timeout=90), "Could not start Notes API"
 
         # Verify it's healthy in the API
@@ -262,7 +261,7 @@ class TestBootRestore:
         """The ultimate test — restart the container, service should come back."""
         # Ensure running first
         if not curl_notes()[0]:
-            post_api(f"/api/services/Notes%20API/restart")
+            post_api("/api/services/Notes%20API/restart")
             assert wait_for_condition(lambda: curl_notes()[0], timeout=90)
 
         # Restart container
@@ -290,7 +289,7 @@ class TestBootRestore:
         """SQLite data persists across container restart."""
         # Get data before
         if not curl_notes()[0]:
-            post_api(f"/api/services/Notes%20API/restart")
+            post_api("/api/services/Notes%20API/restart")
             wait_for_condition(lambda: curl_notes()[0], timeout=90)
 
         _, before = curl_notes()
@@ -314,7 +313,7 @@ class TestDashboardUI:
     def test_services_dock_pill_visible(self):
         """The dock should have a Services pill with count."""
         r = requests.get(f"{BASE}/", timeout=10)
-        html = r.text
+        _html = r.text
         # The dock pill is rendered by JS, so check the API instead
         data = api("/api/services")
         services = data.get("services", [])
@@ -338,7 +337,7 @@ class TestDashboardUI:
         notes = [s for s in data["services"] if s.get("port") == NOTES_PORT]
         if notes:
             # Credentials are extracted from card body
-            cred = notes[0].get("credentials_hint", "")
+            _cred = notes[0].get("credentials_hint", "")
             # May or may not have it depending on card content
             # Just verify the field exists
             assert "credentials_hint" in notes[0] or "url" in notes[0]

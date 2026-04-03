@@ -6,7 +6,6 @@ network probes, and environment variables.
 
 import os
 import tempfile
-from unittest.mock import patch, AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -21,7 +20,7 @@ from agos.evolution.component_evolver import (
     BrainEvolver,
     SelfImprovementLoop,
 )
-from agos.evolution.tool_evolver import ToolEvolver, ToolNeed
+from agos.evolution.tool_evolver import ToolEvolver
 
 
 # ── Fixtures ───────────────────────────────────────────────
@@ -168,7 +167,7 @@ async def test_hand_evolver_detects_repeated_commands(audit, bus):
     for i in range(8):
         await audit.record(AuditEntry(
             agent_name="user", action="shell_command",
-            detail=f"git status --short", success=True,
+            detail="git status --short", success=True,
         ))
 
     evolver = HandEvolver(bus, audit)

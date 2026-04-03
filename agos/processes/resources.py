@@ -196,7 +196,6 @@ class ResourceRegistry:
         against what's ACTUALLY running. Updates status accordingly.
         Returns a report of what changed.
         """
-        import subprocess
 
         changes = {"alive": 0, "dead": 0, "updated": []}
         active = self.active()

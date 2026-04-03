@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agos.evolution.sandbox import Sandbox
-from agos.evolution.state import EvolutionState, DesignArchive, DesignEntry
+from agos.evolution.state import EvolutionState
 
 
 # ── export_contribution Tests (now aggregate stats only) ──────

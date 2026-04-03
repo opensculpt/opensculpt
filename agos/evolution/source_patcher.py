@@ -26,7 +26,6 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from agos.events.bus import EventBus
 from agos.policy.audit import AuditTrail, AuditEntry

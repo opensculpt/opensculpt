@@ -330,7 +330,7 @@ async def set_api_key(payload: ApiKeyPayload) -> dict:
     if not key and provider_name != "lmstudio":
         return {"ok": False, "error": "API key cannot be empty"}
 
-    base_url = payload.base_url.strip() if payload.base_url else ""
+    _base_url = payload.base_url.strip() if payload.base_url else ""
 
     # Wire LLM provider into OS agent
     if _os_agent is not None:
@@ -637,7 +637,6 @@ async def evolution_changelog() -> dict:
     Reads real evolved files from disk, real insights from EvolutionMemory,
     and real strategies from EvolutionState. Nothing is fabricated.
     """
-    import os
     from pathlib import Path
 
     entries = []
@@ -1088,7 +1087,6 @@ async def wizard_demo(payload: CommandPayload) -> dict:
     """Run a real system probe for the wizard demo (no OS agent needed)."""
     import asyncio
     import platform
-    import shutil
 
     cmd = payload.command.lower().strip()
     lines: list[dict] = []  # {"text": ..., "cls": "ok"|"info"|"dim"|"cmd"|"warn"}
@@ -1424,7 +1422,7 @@ async def wizard_evolve_demo() -> dict:
             "id": "search", "label": "Arxiv Search",
             "icon": "search", "status": "done",
             "detail": f'Searched: "{topic}" -- found {len(papers)} papers',
-            "sub": f"Source: export.arxiv.org | Categories: cs.AI, cs.CL, cs.LG",
+            "sub": "Source: export.arxiv.org | Categories: cs.AI, cs.CL, cs.LG",
         })
     else:
         stages.append({
@@ -1497,7 +1495,7 @@ async def wizard_evolve_demo() -> dict:
 
     if result.passed:
         out_lines = result.output.strip().split("\n")
-        pass_line = next((l for l in out_lines if "PASS" in l), out_lines[-1] if out_lines else "OK")
+        pass_line = next((line for line in out_lines if "PASS" in line), out_lines[-1] if out_lines else "OK")
         stages.append({
             "id": "sandbox", "label": "Sandbox Passed",
             "icon": "test", "status": "done",

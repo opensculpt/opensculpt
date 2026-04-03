@@ -1,0 +1,57 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]" playwright
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium --with-deps
+
+      - name: Start OpenSculpt server
+        run: python -m agos.serve &
+        env:
+          SCULPT_DASHBOARD_HOST: 127.0.0.1
+          SCULPT_DASHBOARD_PORT: 8420
+          SCULPT_APPROVAL_MODE: auto
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8420/api/status > /dev/null 2>&1; then
+              echo "Server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to start"
+          exit 1
+
+      - name: Run Playwright E2E tests
+        run: |
+          pytest tests/test_frontend_playwright.py tests/test_user_stories.py \
+            -v --tb=short -p no:faulthandler --timeout=60
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            test-results/
+            playwright-report/

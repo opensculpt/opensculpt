@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agos.daemons.base import Daemon, DaemonResult, DaemonStatus
+from agos.daemons.base import Daemon, DaemonResult
 
 _logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class GoalRunner(Daemon):
         for g in goals:
             if g.get("status") == "active":
                 age_hours = (now - g.get("created_at", now)) / 3600
-                pending = [p for p in g.get("phases", []) if p.get("status") == "pending"]
+                _pending = [p for p in g.get("phases", []) if p.get("status") == "pending"]
                 done = [p for p in g.get("phases", []) if p.get("status") == "done"]
                 # If goal is >2 hours old and has no completed phases, mark stale
                 if age_hours > 2 and not done:
@@ -529,7 +529,9 @@ Return JSON only:
             # If this phase started a service (detected from verify command or result),
             # auto-spawn a health daemon even if creates_daemon wasn't set.
             # The LLM forgets to set creates_daemon — the OS shouldn't depend on that.
-            if phase_ok and not current.get("creates_daemon") and self._daemon_manager:
+            if not current.get("creates_daemon") and self._daemon_manager:
+                # Detect services even on failed phases — the service may be
+                # running despite a bad verify command (demand #6)
                 await self._auto_detect_service(goal, current)
 
             # ── SERVICE CARD EXTRACTION ──
@@ -604,7 +606,7 @@ Return JSON only:
                         current["verify"] = new_verify
                         current["status"] = "pending"
                         current["retries"] = retries + 1
-                        current["result"] += f"\n[Diagnosis: verify command was wrong. Fixed.]"
+                        current["result"] += "\n[Diagnosis: verify command was wrong. Fixed.]"
                         self._save_goal(goal)
                         # Re-run verification immediately with fixed command
                         await self.emit("phase_retrying", {
@@ -834,7 +836,7 @@ Return JSON only:
 ## Goal: {goal['description'][:100]}
 
 ## What was learned:
-{chr(10).join(f'- {l}' for l in learned[:20])}
+{chr(10).join(f'- {item}' for item in learned[:20])}
 
 ## Phase result:
 {phase.get('result', '')[:300]}
@@ -882,7 +884,7 @@ Return JSON only:
         ]
 
         try:
-            daemon = await self._daemon_manager.create_domain_daemon(
+            _daemon = await self._daemon_manager.create_domain_daemon(
                 name=daemon_name,
                 config={
                     "task": daemon_description,
@@ -917,7 +919,7 @@ Return JSON only:
         """
         verify_cmd = phase.get("verify", "")
         result_text = phase.get("result", "")
-        command = phase.get("command", "")
+        _command = phase.get("command", "")
 
         # Detect port from verify command (e.g., "curl -sf http://localhost:8080")
         import re
@@ -934,7 +936,7 @@ Return JSON only:
             return
 
         try:
-            daemon = await self._daemon_manager.create_domain_daemon(
+            _daemon = await self._daemon_manager.create_domain_daemon(
                 name=service_name,
                 config={
                     "task": f"Monitor service on port {port}. If health check fails, restart it.",

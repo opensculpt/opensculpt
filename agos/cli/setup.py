@@ -28,7 +28,7 @@ def setup_wizard(ctx: typer.Context):
 
 def _run_wizard():
     from agos.config import settings
-    from agos.setup_store import is_first_run, mark_wizard_complete
+    from agos.setup_store import mark_wizard_complete
 
     console.print(Panel(
         "[bold]Welcome to OpenSculpt[/bold] — The Self-Evolving Agentic OS\n\n"
@@ -290,7 +290,7 @@ provider_app = typer.Typer(help="Manage LLM providers")
 @provider_app.command("list")
 def provider_list():
     """List all LLM providers and their config status."""
-    from agos.llm.providers import ALL_PROVIDERS, provider_config_fields
+    from agos.llm.providers import ALL_PROVIDERS
     from agos.setup_store import load_setup
     from agos.config import settings
 

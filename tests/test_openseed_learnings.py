@@ -7,7 +7,6 @@ Validates:
 4. Durable insights persistence as .md files
 5. Full lifecycle integration (save/restore auto-wire)
 """
-import asyncio
 import glob
 import os
 import tempfile
@@ -15,7 +14,7 @@ import tempfile
 import pytest
 
 from agos.guard import LoopGuard
-from agos.policy.audit import AuditTrail, AuditEntry
+from agos.policy.audit import AuditTrail
 from agos.evolution.state import EvolutionMemory, EvolutionInsight, EvolutionState
 from agos.evolution.demand import DemandCollector, DemandSignal
 from agos.events.bus import EventBus

@@ -922,7 +922,7 @@ async def evolution_loop(bus: EventBus, audit: AuditTrail, loom,
     }, source="evolution_loop")
 
     # Create sandbox for meta-evolution eval tasks
-    meta_sandbox = Sandbox(timeout=10)
+    _meta_sandbox = Sandbox(timeout=10)
 
     # Initialize ToolEvolver — the OS evolves its own capabilities
     from agos.evolution.tool_evolver import ToolEvolver
@@ -954,7 +954,7 @@ async def evolution_loop(bus: EventBus, audit: AuditTrail, loom,
             _logger.debug("SourcePatcher init failed: %s", e)
 
     # Initialize SelfImprovementLoop — unified evolution for all components
-    self_improvement = SelfImprovementLoop(
+    _self_improvement = SelfImprovementLoop(
         event_bus=bus,
         audit=audit,
         tool_registry=tool_registry,
@@ -1140,7 +1140,7 @@ async def evolution_loop(bus: EventBus, audit: AuditTrail, loom,
                         demand_collector.clear_resolved(f"tool_fail:{tool_name}")
                         demand_collector.clear_resolved(f"capability_gap:{tool_name}")
                         demand_collector.clear_resolved(f"missing_tool:{tool_name}")
-                        demand_collector.clear_resolved(f"os_error:")
+                        demand_collector.clear_resolved("os_error:")
             except Exception as e:
                 _logger.debug("Tool evolution error: %s", e)
 

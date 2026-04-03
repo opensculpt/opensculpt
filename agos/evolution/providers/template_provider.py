@@ -7,7 +7,6 @@ and passes the sandbox by construction.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import random
 import re

@@ -1,7 +1,7 @@
 """Tests for the evolution provider router."""
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 from agos.evolution.providers.router import build_evolution_provider
 

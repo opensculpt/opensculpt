@@ -6,7 +6,6 @@ and verifies the system actually works end-to-end.
 Requires: server running on port 8420 with LLM configured.
 Run with: python -m pytest tests/test_scenario_live.py -v -s
 """
-import json
 import time
 
 import httpx
@@ -275,8 +274,8 @@ class TestDomainDaemon:
     def test_create_domain_daemon_via_api(self, server_ready):
         """Create a DomainDaemon via DaemonManager and verify it ticks."""
         before = api_get("/daemons")
-        before_count = before["count"]
-        before_names = [d["name"] for d in before["daemons"]]
+        _before_count = before["count"]
+        _before_names = [d["name"] for d in before["daemons"]]
 
         # Ask OS to set up monitoring (should trigger GoalRunner -> DomainDaemon)
         result = send_command(
@@ -287,11 +286,11 @@ class TestDomainDaemon:
 
         # Check if new daemons were created
         after = api_get("/daemons")
-        after_names = [d["name"] for d in after["daemons"]]
+        _after_names = [d["name"] for d in after["daemons"]]
 
         # Check goals too
         goals = api_get("/goals")["goals"]
-        active_goals = [g for g in goals if g["status"] in ("active", "operating")]
+        _active_goals = [g for g in goals if g["status"] in ("active", "operating")]
         assert len(goals) > 0, "Expected at least one goal"
 
     def test_domain_daemon_fast_check(self, server_ready):

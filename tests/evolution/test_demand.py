@@ -1,5 +1,4 @@
 """Tests for demand-driven evolution signals."""
-import time
 import pytest
 from agos.evolution.demand import DemandSignal, DemandCollector
 from agos.events.bus import Event

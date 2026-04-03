@@ -5,7 +5,6 @@ Tests written BEFORE fixes — they should FAIL first, then PASS after fixes.
 Run: python -m pytest tests/test_ui_bugs.py -v
 Requires: container running on port 8420
 """
-import time
 import requests
 import pytest
 

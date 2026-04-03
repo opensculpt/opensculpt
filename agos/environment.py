@@ -370,7 +370,7 @@ class EnvironmentProbe:
         if env.pip:
             install_methods.append("pip install (Python packages, Flask, Django, etc.)")
         if env.npm:
-            install_methods.append(f"npm install (Node.js packages, Express, etc.)")
+            install_methods.append("npm install (Node.js packages, Express, etc.)")
         if env.brew:
             install_methods.append("brew install (macOS packages)")
         if install_methods:

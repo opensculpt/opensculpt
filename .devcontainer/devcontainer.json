@@ -28,7 +28,8 @@
     }
   },
 
-  "postCreateCommand": "pip install -e '.[dev]' 2>/dev/null || pip install -e .",
+  "postCreateCommand": "pip install -e '.[dev]' 2>/dev/null || pip install -e . && echo '✅ OpenSculpt installed. Run: python -m agos.serve'",
+  "postStartCommand": "nohup python -m agos.serve > /tmp/opensculpt.log 2>&1 &",
 
   "forwardPorts": [8420],
   "portsAttributes": {
@@ -36,7 +37,9 @@
   },
 
   "containerEnv": {
-    "SCULPT_LLM_PROVIDER": "anthropic"
+    "SCULPT_DASHBOARD_HOST": "0.0.0.0",
+    "SCULPT_DASHBOARD_PORT": "8420",
+    "SCULPT_APPROVAL_MODE": "auto"
   },
 
   "remoteUser": "vscode"

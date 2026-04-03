@@ -21,11 +21,10 @@ import json
 import logging
 import re
 from collections import Counter
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-import aiosqlite
 
 from agos.knowledge import db as _db
 

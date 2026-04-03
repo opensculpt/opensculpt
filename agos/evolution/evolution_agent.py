@@ -29,11 +29,10 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from agos.events.bus import EventBus
-from agos.policy.audit import AuditTrail, AuditEntry
-from agos.evolution.demand import DemandCollector, DemandSignal
+from agos.policy.audit import AuditTrail
+from agos.evolution.demand import DemandCollector
 from agos.evolution.state import EvolutionMemory, EvolutionInsight
 
 _logger = logging.getLogger(__name__)
@@ -526,7 +525,7 @@ RULES:
         if not path:
             return "Error: path required"
         if not (path.startswith("agos/") or path.startswith(".opensculpt/")):
-            return f"Error: can only read agos/ and .opensculpt/ files"
+            return "Error: can only read agos/ and .opensculpt/ files"
         try:
             content = Path(path).read_text(encoding="utf-8", errors="ignore")
             return content[:8000] + (f"\n... ({len(content)} total)" if len(content) > 8000 else "")
@@ -693,7 +692,7 @@ RULES:
         if not target or not rule:
             return "Error: target and rule required"
         if target not in ("os_agent", "sub_agent", "goal_planner"):
-            return f"Error: target must be os_agent, sub_agent, or goal_planner"
+            return "Error: target must be os_agent, sub_agent, or goal_planner"
 
         staging_rules = STAGING_DIR / "rules"
         staging_rules.mkdir(parents=True, exist_ok=True)
@@ -723,7 +722,7 @@ RULES:
         if original not in content:
             return f"Error: original text not found in {filepath}. Must match exactly."
         if abs(replacement.count("\n") - original.count("\n")) > 50:
-            return f"Error: patch too large (max 50 line diff)"
+            return "Error: patch too large (max 50 line diff)"
 
         # Save to staging (don't modify production yet)
         staging_patches = STAGING_DIR / "patches"

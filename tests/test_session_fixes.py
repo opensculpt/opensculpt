@@ -7,10 +7,8 @@ Run: python -m pytest tests/test_session_fixes.py -v
 """
 import asyncio
 import json
-import time
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -167,7 +165,6 @@ class TestTokenBudget:
     """Test that sub-agents are stopped when they exceed 50K tokens."""
 
     def test_budget_constant_exists(self):
-        import agos.os_agent as oa
         source = Path("agos/os_agent.py").read_text(encoding="utf-8")
         assert "_TOKEN_BUDGET = 50_000" in source
 

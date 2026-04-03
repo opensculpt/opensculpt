@@ -227,7 +227,7 @@ async def pull_from_peer(
             if resp.status_code != 200:
                 _logger.debug("Sync manifest failed from %s: %d", peer_url, resp.status_code)
                 return result
-            remote_manifest = SyncManifest.from_dict(resp.json())
+            _remote_manifest = SyncManifest.from_dict(resp.json())
         except Exception as e:
             _logger.debug("Sync manifest error from %s: %s", peer_url, e)
             return result
@@ -290,7 +290,7 @@ async def pull_from_peer(
     result["merged_constraints"] = 0
     result["merged_resolutions"] = 0
     try:
-        from agos.knowledge.tagged_store import TaggedConstraintStore, TaggedResolutionStore, fingerprint as _fp
+        from agos.knowledge.tagged_store import TaggedConstraintStore, TaggedResolutionStore
 
         # Prefer tagged files (new format) over flat .md (legacy)
         remote_constraint_files = payload.get("constraint_files", {})
@@ -319,11 +319,11 @@ async def pull_from_peer(
                     symptom = lines[0].strip()
                     fix = ""
                     root_cause = ""
-                    for l in lines[1:]:
-                        if l.strip().startswith("- Fix:"):
-                            fix = l.strip()[6:].strip()
-                        elif l.strip().startswith("- Root cause:"):
-                            root_cause = l.strip()[13:].strip()
+                    for line in lines[1:]:
+                        if line.strip().startswith("- Fix:"):
+                            fix = line.strip()[6:].strip()
+                        elif line.strip().startswith("- Root cause:"):
+                            root_cause = line.strip()[13:].strip()
                     if symptom and fix:
                         if _rs.add(symptom, fix, root_cause, source=f"federated:{payload.get('instance_id', peer_url)}"):
                             result["merged_resolutions"] += 1
@@ -349,9 +349,9 @@ async def pull_from_peer(
                         continue
                     symptom = lines[0].strip()
                     fix = ""
-                    for l in lines[1:]:
-                        if l.strip().startswith("- Fix:"):
-                            fix = l.strip()[6:].strip()
+                    for line in lines[1:]:
+                        if line.strip().startswith("- Fix:"):
+                            fix = line.strip()[6:].strip()
                     if symptom and fix:
                         if _rs.add(symptom, fix, source=f"federated:{payload.get('instance_id', peer_url)}"):
                             result["merged_resolutions"] += 1

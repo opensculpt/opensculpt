@@ -3,9 +3,6 @@
 These tests simulate what a real user does after installing OpenSculpt.
 Every test here must pass before shipping.
 """
-import asyncio
-import json
-import os
 import subprocess
 import sys
 import time

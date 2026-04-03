@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agos.daemons.base import Daemon, DaemonStatus
+
+if TYPE_CHECKING:
+    from agos.daemons.gc import GarbageCollector
+    from agos.daemons.goal_runner import GoalRunner
+    from agos.hands.base import Hand
 
 _logger = logging.getLogger(__name__)
 

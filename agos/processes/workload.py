@@ -113,7 +113,7 @@ def _python_install(path: Path) -> list[str]:
     if req.exists():
         # Skip if requirements.txt is empty or comments-only
         content = req.read_text(encoding="utf-8", errors="replace").strip()
-        lines = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith("#")]
+        lines = [line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
         if not lines:
             return []  # Nothing to install
         return pip + ["install", "--no-cache-dir", "-r", "requirements.txt"]

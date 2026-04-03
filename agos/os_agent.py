@@ -23,14 +23,14 @@ from typing import Any
 
 _logger = logging.getLogger(__name__)
 
-from agos.llm.base import BaseLLMProvider, LLMMessage
-from agos.tools.schema import ToolSchema, ToolParameter
-from agos.tools.registry import ToolRegistry
-from agos.events.bus import EventBus
-from agos.policy.audit import AuditTrail, AuditEntry
-from agos.guard import LoopGuard, CapabilityGate
-from agos.session import SessionCompactor
-from agos.knowledge.working import WorkingMemory
+from agos.llm.base import BaseLLMProvider, LLMMessage  # noqa: E402
+from agos.tools.schema import ToolSchema, ToolParameter  # noqa: E402
+from agos.tools.registry import ToolRegistry  # noqa: E402
+from agos.events.bus import EventBus  # noqa: E402
+from agos.policy.audit import AuditTrail, AuditEntry  # noqa: E402
+from agos.guard import LoopGuard, CapabilityGate  # noqa: E402
+from agos.session import SessionCompactor  # noqa: E402
+from agos.knowledge.working import WorkingMemory  # noqa: E402
 
 MAX_TURNS = 40
 MAX_TOKENS = 200_000
@@ -526,7 +526,8 @@ class OSAgent:
         # Inject evolved OS agent rules from Evolution Agent
         os_rules = ""
         try:
-            rules_file = settings.workspace_dir / "evolved" / "brain" / "os_agent_rules.txt"
+            from agos.config import settings as _settings_rules
+            rules_file = _settings_rules.workspace_dir / "evolved" / "brain" / "os_agent_rules.txt"
             if rules_file.exists():
                 rules_text = rules_file.read_text(encoding="utf-8", errors="ignore").strip()
                 if rules_text:
@@ -1095,7 +1096,7 @@ class OSAgent:
     async def _on_tool_activated(self, event) -> None:
         """Evolution activated a builtin tool - register it now."""
         module = event.data.get("module", "")
-        tool = event.data.get("tool", "")
+        _tool = event.data.get("tool", "")
         if "docker" in module and not self._dormant_tools.get("docker"):
             self._register_docker_tools()
             self._dormant_tools["docker"] = True
@@ -1110,7 +1111,8 @@ class OSAgent:
         tool_name = event.data.get("tool", "")
         if not tool_name or self._inner_registry.get_tool(tool_name):
             return
-        tool_file = settings.workspace_dir / "evolved" / "tools" / f"{tool_name}.py"
+        from agos.config import settings as _settings_tool
+        tool_file = _settings_tool.workspace_dir / "evolved" / "tools" / f"{tool_name}.py"
         if not tool_file.exists():
             return
         try:
@@ -1480,7 +1482,6 @@ class OSAgent:
         # OpenHands lesson: context bloat kills performance. Less is more.
         skill_context = ""
         try:
-            import pathlib
             from agos.config import settings
             skills_dir = settings.workspace_dir / "skills"
             if skills_dir.exists():
@@ -1921,8 +1922,9 @@ RULES:
                     )
                     import json as _json
                     problems_text = (analysis.content or "").strip()
-                    problems_text = re.sub(r'^```json\s*', '', problems_text)
-                    problems_text = re.sub(r'\s*```$', '', problems_text)
+                    import re as _re
+                    problems_text = _re.sub(r'^```json\s*', '', problems_text)
+                    problems_text = _re.sub(r'\s*```$', '', problems_text)
                     problems = _json.loads(problems_text) if problems_text.startswith("[") else []
                     for problem in problems[:3]:
                         await self._bus.emit("os.capability_gap", {

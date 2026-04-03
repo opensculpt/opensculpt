@@ -21,7 +21,6 @@ External GC (AWS):
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -165,7 +164,7 @@ class GarbageCollector(Daemon):
             self._reports = self._reports[-50:]
 
         # Emit summary
-        total_cleaned = (
+        _total_cleaned = (
             report.orphaned_resources + report.stale_goals +
             report.dead_agents_pruned + report.temp_files_cleaned +
             report.aws_orphans_terminated
@@ -707,7 +706,7 @@ class GarbageCollector(Daemon):
 
         for url in resp.get("QueueUrls", []):
             try:
-                attr_resp = await asyncio.to_thread(
+                _attr_resp = await asyncio.to_thread(
                     sqs.get_queue_attributes,
                     QueueUrl=url,
                     AttributeNames=["All"])

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from agos.events.bus import EventBus
 from agos.policy.audit import AuditTrail, AuditEntry
-from agos.evolution.sandbox import Sandbox, SandboxResult
+from agos.evolution.sandbox import Sandbox
 
 _logger = logging.getLogger(__name__)
 
@@ -287,7 +287,7 @@ class AgentEvolver(ComponentEvolver):
         if errors:
             error_summary = "; ".join(set(errors[:3]))
             patch_lines.append(f"# Common errors observed: {error_summary}")
-            patch_lines.append(f"# Adjust behavior to avoid these failure patterns.")
+            patch_lines.append("# Adjust behavior to avoid these failure patterns.")
 
             if any("timeout" in e.lower() for e in errors):
                 patch_lines.append("- Use shorter timeouts. Prefer quick retries over long waits.")
@@ -827,7 +827,7 @@ class BrainEvolver(ComponentEvolver):
 
     async def propose(self, opp: dict, llm=None) -> EvolutionProposal | None:
         failures = opp["context"].get("failures", [])
-        successes = opp["context"].get("successes", [])
+        _successes = opp["context"].get("successes", [])
 
         new_rules = []
 
@@ -852,7 +852,7 @@ class BrainEvolver(ComponentEvolver):
         if llm and failures:
             try:
                 resp = await llm.complete_prompt(
-                    f"The OS agent failed on these tasks:\n"
+                    "The OS agent failed on these tasks:\n"
                     + "\n".join(f"- {f}" for f in failures[:5])
                     + "\n\nWrite 2-3 concise rules (one line each) the agent should follow to avoid these. "
                     "Rules should be actionable and specific.",

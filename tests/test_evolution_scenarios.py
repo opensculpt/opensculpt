@@ -11,12 +11,11 @@ Each scenario:
 5. New tool is generated and deployed
 6. Verify the tool exists in the registry
 """
-import asyncio
 import pytest
 
 from agos.events.bus import EventBus
 from agos.policy.audit import AuditTrail
-from agos.evolution.demand import DemandCollector, DemandSignal
+from agos.evolution.demand import DemandCollector
 from agos.evolution.tool_evolver import ToolEvolver
 from agos.tools.registry import ToolRegistry
 

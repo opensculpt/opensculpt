@@ -131,7 +131,7 @@ class TestTellUserAction:
             content='{"action":"tell_user","message":"Need Docker installed"}'
         ))
         try:
-            result = await solver.tick(llm=mock_llm)
+            _result = await solver.tick(llm=mock_llm)
         except AttributeError as e:
             if '_try_vibe_tool' in str(e):
                 pytest.fail(f"_try_vibe_tool not implemented: {e}")
@@ -146,7 +146,7 @@ class TestVibeBridgeDeleted:
     def test_vibe_bridge_not_importable(self):
         """vibe_bridge should not be importable — it's deleted."""
         try:
-            from agos.evolution import vibe_bridge
+            from agos.evolution import vibe_bridge  # noqa: F401
             pytest.fail("vibe_bridge.py should be deleted — wrong design")
         except ImportError:
             pass  # Expected

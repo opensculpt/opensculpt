@@ -58,8 +58,6 @@ async def load_community_contributions(
     Security: verifies origin before loading, sandbox-validates all code.
     All users get community code equally (maintainer-curated).
     """
-    from agos.config import settings as _settings
-    from datetime import datetime, timedelta
 
     # ── Security Gate 1: Origin verification ──
     if not _verify_community_origin():
