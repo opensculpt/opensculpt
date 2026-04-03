@@ -265,7 +265,7 @@ footer{border-top:1px solid var(--crack);padding:36px 28px;display:flex;justify-
     <a href="#evo">Evolution</a>
     <a href="#join">Join</a>
     <a href="war-stories.html">War Stories</a>
-    <a href="https://github.com/opensculpt/opensculpt/releases/latest" class="cta-sm" target="_blank" style="background:var(--gold);color:#080808;border-color:var(--gold)">Download</a>
+    <a href="#join" class="cta-sm" style="background:var(--gold);color:#080808;border-color:var(--gold)">Install</a>
     <a href="https://github.com/opensculpt/opensculpt" class="cta-sm" target="_blank">GitHub</a>
     <a href="https://github.com/opensculpt/opensculpt" class="cta-sm star-btn" target="_blank" style="background:var(--stone2);border-color:var(--dust);display:inline-flex;align-items:center;gap:5px">&#9733; Star</a>
   </div>
@@ -281,9 +281,9 @@ footer{border-top:1px solid var(--crack);padding:36px 28px;display:flex;justify-
       <h1>An OS that<br><em>evolves itself.</em><br>Help us build it.</h1>
       <p class="sub">Linux for AI agents &mdash; but unlike Linux, when it breaks, it patches its own code and gets smarter. <strong>Your vibe coding tool is the chisel.</strong></p>
       <div class="hero-btns">
-        <a href="https://github.com/opensculpt/opensculpt/releases/latest" class="btn btn-gold" target="_blank">⬇ Download for Windows</a>
-        <a href="#join" class="btn btn-ghost">Pick Up a Chisel</a>
+        <a href="#join" class="btn btn-gold">pip install opensculpt</a>
         <a href="#problem" class="btn btn-ghost">Why an OS?</a>
+        <a href="manifesto.html" class="btn btn-ghost">The Manifesto</a>
         <a href="https://github.com/opensculpt/opensculpt" class="btn btn-ghost" target="_blank">GitHub</a>
       </div>
     </div>
@@ -410,30 +410,25 @@ footer{border-top:1px solid var(--crack);padding:36px 28px;display:flex;justify-
       <p class="forge-sub">Pick your path. We'll hand you the right chisel.</p>
 
       <div class="forge-paths">
-        <!-- PATH 0: Just install it (.exe) -->
+        <!-- PATH 0: Just install it (pip) -->
         <div class="forge-path" onclick="openPath(this)" data-path="install" style="border-color:var(--gold)">
           <div class="path-head">
             <span class="path-icon">⬇️</span>
             <div class="path-title">Just install it</div>
-            <div class="path-desc">Download the .exe — no code, no terminal</div>
+            <div class="path-desc">pip install — works on any OS</div>
           </div>
           <div class="path-tools">
             <div class="crack-line"></div>
-            <a href="https://github.com/opensculpt/opensculpt/releases/latest" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('exe-download')">
-              <span class="tool-t-icon">🪟</span>
-              <div class="tool-t-info"><span class="tool-t-name">Windows (.exe)</span><span class="tool-t-action">download &amp; run — no dependencies</span></div>
+            <div class="forge-tool" onclick="event.stopPropagation();copyForge(this,'pip install opensculpt && sculpt')">
+              <span class="tool-t-icon">🐍</span>
+              <div class="tool-t-info"><span class="tool-t-name">pip install opensculpt</span><span class="tool-t-action">Windows, macOS, Linux — Python 3.11+</span></div>
+              <span class="tool-t-arrow" data-orig="copy">copy</span>
+            </div>
+            <a href="https://codespaces.new/OpenSculpt/opensculpt?quickstart=1" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('codespaces')">
+              <span class="tool-t-icon">☁️</span>
+              <div class="tool-t-info"><span class="tool-t-name">GitHub Codespaces</span><span class="tool-t-action">no install — runs in browser, 120 free hrs/mo</span></div>
               <span class="tool-t-arrow">&rarr;</span>
             </a>
-            <div class="forge-tool" style="opacity:.45;pointer-events:none">
-              <span class="tool-t-icon">🍎</span>
-              <div class="tool-t-info"><span class="tool-t-name">macOS</span><span class="tool-t-action">coming soon</span></div>
-              <span class="tool-t-arrow" style="font-size:11px">soon</span>
-            </div>
-            <div class="forge-tool" style="opacity:.45;pointer-events:none">
-              <span class="tool-t-icon">🐧</span>
-              <div class="tool-t-info"><span class="tool-t-name">Linux</span><span class="tool-t-action">coming soon</span></div>
-              <span class="tool-t-arrow" style="font-size:11px">soon</span>
-            </div>
           </div>
         </div>
 
