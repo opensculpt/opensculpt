@@ -9,6 +9,14 @@ build/
 .pytest_cache/
 *.spec.bak
 
+# Secrets & keys — NEVER commit
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+setup.json
+
 # agos workspace (user-specific data)
 .agos/
 *.db
