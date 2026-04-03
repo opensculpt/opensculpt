@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="openSulpt_text.png" alt="OpenSculpt" width="500">
+  <img src="https://raw.githubusercontent.com/opensculpt/opensculpt/main/openSulpt_text.png" alt="OpenSculpt" width="500">
 </p>
 
 <h3 align="center">The Self-Evolving Agentic OS</h3>
