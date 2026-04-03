@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenSculpt — An OS That Evolves Itself</title>
+<meta name="description" content="Linux for AI agents. When it breaks, it patches its own code. Your vibe coding tool is the chisel. Join the revolution.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,700;1,300&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════
+   DESIGN: Brutalist-Organic — raw stone meets clean code
+   ═══════════════════════════════════════════════ */
+:root {
+  --void: #050507;
+  --stone: #0C0C10;
+  --stone2: #131318;
+  --stone3: #1A1A22;
+  --crack: #252530;
+  --dust: #3A3A48;
+  --text: #B8B8C4;
+  --text-dim: #6E6E80;
+  --light: #E8E8F0;
+  --gold: #D4A843;
+  --gold-soft: rgba(212,168,67,0.08);
+  --gold-glow: rgba(212,168,67,0.15);
+  --ember: #E86840;
+  --moss: #3BBF80;
+  --sky: #5BA0E8;
+  --violet: #A080F0;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:60px}
+body{background:var(--void);color:var(--text);font-family:'DM Sans',sans-serif;font-weight:300;line-height:1.7;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+/* Grain overlay */
+body::after{content:'';position:fixed;inset:0;background:url("data:image/svg+xml,%3Csvg width='256' height='256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");pointer-events:none;z-index:9999}
+
+h1,h2,h3,h4{font-family:'Playfair Display',serif;color:var(--light);font-weight:700;letter-spacing:-0.02em}
+a{color:var(--gold);text-decoration:none;transition:color .2s}a:hover{color:#E8C060}
+code{font-family:'IBM Plex Mono',monospace;font-size:.88em}
+.container{max-width:1100px;margin:0 auto;padding:0 28px}
+
+/* ─── NAV ──── */
+nav{position:fixed;top:0;left:0;right:0;z-index:1000;padding:0 28px;height:56px;display:flex;justify-content:space-between;align-items:center;background:rgba(5,5,7,0.8);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid transparent;transition:border-color .3s}
+nav.scrolled{border-bottom-color:var(--crack)}
+.nav-logo{display:flex;align-items:center;gap:10px}
+.nav-logo img{height:32px}
+.nav-r{display:flex;gap:24px;align-items:center}
+.nav-r a{font-size:13px;color:var(--text-dim);font-weight:400;letter-spacing:.01em}
+.nav-r a:hover{color:var(--light)}
+.nav-r .cta-sm{padding:6px 16px;border:1px solid var(--crack);border-radius:6px;font-weight:500;font-size:12px}
+.nav-r .cta-sm:hover{border-color:var(--dust);color:var(--light)}
+.nav-ham{display:none;color:var(--text-dim);font-size:22px;cursor:pointer}
+
+/* ─── HERO: The visual thesis ──── */
+.hero{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:80px 28px 60px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-10%;right:-5%;width:600px;height:600px;background:radial-gradient(circle,var(--gold-glow) 0%,transparent 60%);filter:blur(100px);pointer-events:none;animation:drift 20s ease-in-out infinite alternate}
+.hero::after{content:'';position:absolute;bottom:-10%;left:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(91,160,232,0.06) 0%,transparent 60%);filter:blur(80px);pointer-events:none;animation:drift 25s ease-in-out infinite alternate-reverse}
+@keyframes drift{0%{transform:translate(0,0)}100%{transform:translate(40px,-30px)}}
+
+.hero-inner{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center;max-width:1100px;width:100%;position:relative;z-index:1}
+
+/* Left: text */
+.hero-text h1{font-size:clamp(2.6rem,5.5vw,4.2rem);line-height:1.05;margin-bottom:24px;font-weight:900}
+.hero-text h1 em{font-style:italic;color:var(--gold)}
+.hero-text .sub{font-size:1.1rem;color:var(--text-dim);margin-bottom:32px;max-width:480px;line-height:1.65}
+.hero-text .sub strong{color:var(--light);font-weight:500}
+.hero-btns{display:flex;gap:12px;flex-wrap:wrap}
+.btn{padding:13px 26px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all .25s;font-family:inherit;display:inline-flex;align-items:center;gap:8px}
+.btn-gold{background:var(--gold);color:#080808}.btn-gold:hover{background:#E0B850;transform:translateY(-2px);box-shadow:0 12px 40px rgba(212,168,67,0.25)}
+.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--crack)}.btn-ghost:hover{border-color:var(--dust);background:var(--stone2)}
+
+/* Right: mascot face-off */
+.faceoff{display:flex;flex-direction:column;gap:0;position:relative}
+.mascot-row{display:flex;align-items:center;gap:20px;padding:24px;border:1px solid var(--crack);transition:all .3s}
+.mascot-row:first-child{border-radius:16px 16px 0 0;background:var(--stone)}
+.mascot-row:last-child{border-radius:0 0 16px 16px;border-color:var(--gold);border-width:1.5px;background:linear-gradient(135deg,rgba(212,168,67,0.04),transparent)}
+.mascot-row img{width:72px;height:72px;object-fit:contain;flex-shrink:0}
+.mascot-info h3{font-size:1.15rem;margin-bottom:2px}
+.mascot-info h3 span{font-weight:400;color:var(--text-dim);font-size:.8em;font-family:'DM Sans',sans-serif}
+.mascot-info p{font-size:13px;color:var(--text-dim);line-height:1.45}
+.mascot-row:last-child .mascot-info p{color:var(--gold)}
+.vs-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--stone3);border:1px solid var(--crack);border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-family:'Playfair Display',serif;font-size:13px;color:var(--text-dim);z-index:2}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.hero-text>*{animation:fadeIn .7s ease both}
+.hero-text h1{animation-delay:.1s}
+.hero-text .sub{animation-delay:.2s}
+.hero-btns{animation-delay:.3s}
+.faceoff{animation:fadeIn .8s ease .25s both}
+
+/* ─── SECTION DEFAULTS ──── */
+section{padding:100px 0}
+.sec-label{font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.15em;color:var(--text-dim);margin-bottom:16px}
+.sec-head{font-size:clamp(1.6rem,3.5vw,2.5rem);margin-bottom:12px;line-height:1.15}
+.sec-sub{font-size:1rem;color:var(--text-dim);max-width:540px;line-height:1.6}
+
+/* ─── WAR STORIES (the problem) ──── */
+.wars{background:var(--stone);border-top:1px solid var(--crack);border-bottom:1px solid var(--crack)}
+.wars-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--crack);border-radius:14px;overflow:hidden;margin-top:48px}
+.war{background:var(--void);padding:32px 28px;transition:background .3s}
+.war:hover{background:var(--stone2)}
+.war-tag{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;display:inline-block;padding:3px 8px;border-radius:4px}
+.war-tag.res{background:rgba(232,104,64,.08);color:var(--ember)}
+.war-tag.life{background:rgba(59,191,128,.08);color:var(--moss)}
+.war-tag.mem{background:rgba(91,160,232,.08);color:var(--sky)}
+.war-tag.cost{background:rgba(212,168,67,.08);color:var(--gold)}
+.war-tag.trust{background:rgba(160,128,240,.08);color:var(--violet)}
+.war h3{font-size:1.05rem;margin-bottom:8px}
+.war p{font-size:13px;color:var(--text-dim);line-height:1.55}
+.war .unix{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dust);margin-top:12px;padding-top:10px;border-top:1px solid var(--crack)}
+
+/* ─── ARCHITECTURE ──── */
+.arch-stack{margin-top:48px;max-width:760px}
+.arch-layer{display:grid;grid-template-columns:80px 1fr auto;gap:20px;align-items:center;padding:18px 24px;border:1px solid var(--crack);border-radius:10px;margin-bottom:-1px;transition:all .3s;position:relative}
+.arch-layer:hover{z-index:2;border-color:var(--dust);background:var(--stone)}
+.arch-layer .num{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.1em}
+.arch-layer .name{font-family:'Playfair Display',serif;font-size:1.05rem;color:var(--light);font-weight:700}
+.arch-layer .desc{font-size:13px;color:var(--text-dim)}
+.arch-layer .equiv{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dust);text-align:right}
+.arch-layer.evo{border-color:var(--moss);border-width:2px}
+.arch-layer.evo .num{color:var(--moss)}
+.arch-note{font-size:12px;color:var(--dust);margin-top:16px;text-align:center}
+.arch-note strong{color:var(--moss)}
+
+/* ─── EVOLUTION ──── */
+.evo-sec{background:var(--stone);border-top:1px solid var(--crack);border-bottom:1px solid var(--crack)}
+.evo-flow{display:flex;align-items:flex-start;gap:0;margin:48px 0;justify-content:center;flex-wrap:wrap}
+.evo-node{text-align:center;padding:20px 16px;flex:1;min-width:130px;max-width:170px}
+.evo-n{font-family:'Playfair Display',serif;font-size:2.2rem;font-weight:900;margin-bottom:4px}
+.evo-node h4{font-size:.9rem;margin-bottom:4px;font-weight:700}
+.evo-node p{font-size:12px;color:var(--text-dim)}
+.evo-arr{color:var(--dust);font-size:22px;align-self:center;padding-top:10px}
+.e1 .evo-n{color:var(--ember)} .e2 .evo-n{color:var(--gold)} .e3 .evo-n{color:var(--sky)} .e4 .evo-n{color:var(--violet)} .e5 .evo-n{color:var(--moss)}
+
+/* Terminal example */
+.term{background:var(--void);border:1px solid var(--crack);border-radius:12px;overflow:hidden;max-width:720px;margin:0 auto}
+.term-bar{display:flex;align-items:center;gap:6px;padding:10px 16px;background:var(--stone2);border-bottom:1px solid var(--crack)}
+.term-dot{width:8px;height:8px;border-radius:50%}
+.d1{background:#FF5F57}.d2{background:#FEBC2E}.d3{background:#28C840}
+.term-label{margin-left:12px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dust)}
+.term-body{padding:24px;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.85}
+.t-fail{color:var(--ember)}.t-detect{color:var(--gold)}.t-fix{color:var(--sky)}.t-ok{color:var(--moss)}.t-dim{color:var(--dust)}
+
+/* ─── JOIN / CHISEL ──── */
+.join-head{text-align:center;margin-bottom:56px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:2px;background:var(--crack);border-radius:14px;overflow:hidden;margin-bottom:56px}
+.step{background:var(--void);padding:32px 24px;transition:background .3s}
+.step:hover{background:var(--stone2)}
+.step-n{font-family:'Playfair Display',serif;font-size:2.4rem;font-weight:900;color:var(--gold);opacity:.4;margin-bottom:8px}
+.step h4{font-size:1rem;margin-bottom:8px}
+.step p{font-size:13px;color:var(--text-dim);line-height:1.55}
+
+/* ─── THE FORGE: Progressive chisel selection ──── */
+.forge{text-align:center;margin-bottom:48px}
+.forge>h3{font-size:1.6rem;margin-bottom:6px}
+.forge>.forge-sub{font-size:14px;color:var(--text-dim);margin-bottom:40px}
+
+/* Three stone pathways */
+.forge-paths{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;background:var(--crack);border-radius:16px;overflow:hidden;max-width:840px;margin:0 auto}
+
+/* Each pathway slab */
+.forge-path{background:var(--void);cursor:pointer;transition:all .4s cubic-bezier(.23,1,.32,1);position:relative;overflow:hidden}
+.forge-path::after{content:'';position:absolute;bottom:0;left:20%;right:20%;height:2px;background:var(--gold);opacity:0;transition:all .4s;filter:blur(0px)}
+
+/* Path header (always visible) */
+.path-head{padding:36px 24px 28px;transition:all .3s}
+.path-icon{font-size:36px;margin-bottom:14px;display:block;filter:grayscale(.3);transition:filter .3s}
+.path-title{font-family:'Playfair Display',serif;font-size:1.15rem;color:var(--light);font-weight:700;margin-bottom:6px}
+.path-desc{font-size:12px;color:var(--dust);line-height:1.5;font-family:'IBM Plex Mono',monospace}
+
+/* Hover state */
+.forge-path:hover{background:var(--stone2)}
+.forge-path:hover .path-icon{filter:grayscale(0)}
+.forge-path:hover::after{opacity:.3}
+
+/* Active/selected state — the stone cracks open */
+.forge-path.active{background:var(--stone)}
+.forge-path.active::after{opacity:1;left:10%;right:10%;height:3px;filter:blur(4px)}
+.forge-path.active .path-icon{filter:grayscale(0)}
+.forge-path.active .path-title{color:var(--gold)}
+
+/* Revealed tools (hidden by default) */
+.path-tools{max-height:0;overflow:hidden;transition:max-height .5s cubic-bezier(.23,1,.32,1),opacity .3s,padding .4s;opacity:0;padding:0 20px}
+.forge-path.active .path-tools{max-height:400px;opacity:1;padding:0 20px 28px}
+
+/* Crack line separator */
+.crack-line{height:1px;background:linear-gradient(90deg,transparent,var(--gold),transparent);margin:0 0 18px;opacity:.3}
+
+/* Tool links inside revealed panel */
+.forge-tool{display:flex;align-items:center;gap:14px;padding:12px 16px;border:1px solid var(--crack);border-radius:10px;margin-bottom:8px;text-decoration:none;transition:all .25s;background:transparent;cursor:pointer}
+.forge-tool:hover{border-color:var(--gold);background:var(--gold-soft);transform:translateX(4px)}
+.forge-tool:last-child{margin-bottom:0}
+.tool-t-icon{font-size:20px;flex-shrink:0;width:32px;text-align:center}
+.tool-t-info{text-align:left;flex:1}
+.tool-t-name{font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;color:var(--light);display:block}
+.tool-t-action{font-size:11px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace}
+.tool-t-arrow{color:var(--dust);font-size:14px;transition:all .2s}
+.forge-tool:hover .tool-t-arrow{color:var(--gold);transform:translateX(3px)}
+
+/* Responsive: stack on mobile */
+@media(max-width:700px){.forge-paths{grid-template-columns:1fr}}
+
+/* Math */
+.math{text-align:center;padding:40px 0;margin-bottom:48px}
+.math-row{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:16px;flex-wrap:wrap}
+.math-n{font-family:'Playfair Display',serif;font-size:3rem;font-weight:900;color:var(--light)}
+.math-l{font-size:11px;color:var(--dust);text-transform:uppercase;letter-spacing:.1em;font-family:'IBM Plex Mono',monospace}
+.math-op{font-family:'Playfair Display',serif;font-size:1.8rem;color:var(--dust)}
+.math-cta{font-size:1.1rem;color:var(--text-dim)}
+.math-cta strong{color:var(--gold)}
+
+.fleet{font-size:14px;color:var(--text-dim);max-width:560px;margin:0 auto;text-align:center;line-height:1.7}
+.fleet strong{color:var(--light)}
+
+/* ─── CTA ──── */
+.final{text-align:center;padding:120px 28px 100px;position:relative}
+.final::before{content:'';position:absolute;top:0;left:50%;width:1px;height:60px;background:linear-gradient(to bottom,transparent,var(--crack));transform:translateX(-50%)}
+.final img{border-radius:20px;margin-bottom:24px;box-shadow:0 8px 40px rgba(0,0,0,.4)}
+.final h2{font-size:clamp(1.5rem,3.5vw,2.4rem);margin-bottom:16px}
+.final h2 em{color:var(--gold)}
+.final p{color:var(--text-dim);max-width:480px;margin:0 auto 32px;font-size:1rem}
+
+/* ─── FOOTER ──── */
+footer{border-top:1px solid var(--crack);padding:36px 28px;display:flex;justify-content:space-between;align-items:center;max-width:1100px;margin:0 auto;flex-wrap:wrap;gap:12px}
+.foot-l{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dust)}
+.foot-r{display:flex;gap:20px}
+.foot-r a{font-size:12px;color:var(--dust)}.foot-r a:hover{color:var(--gold)}
+
+/* ─── RESPONSIVE ──── */
+@media(max-width:900px){
+  .hero-inner{grid-template-columns:1fr;gap:40px;text-align:center}
+  .hero-text .sub{margin-left:auto;margin-right:auto}
+  .hero-btns{justify-content:center}
+  .wars-grid{grid-template-columns:repeat(2,1fr)}
+  .arch-layer{grid-template-columns:1fr;gap:6px}
+  .arch-layer .equiv{text-align:left}
+  .evo-flow{flex-direction:column;align-items:center}
+  .evo-arr{transform:rotate(90deg)}
+  .steps{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:560px){
+  .wars-grid,.steps{grid-template-columns:1fr}
+  .nav-r{display:none}.nav-ham{display:block}
+  section{padding:72px 0}
+  .faceoff{margin-top:20px}
+}
+
+/* Scroll reveal */
+.reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+.reveal.vis{opacity:1;transform:none}
+
+/* Mobile nav */
+.nav-r.show{display:flex!important;position:fixed;top:56px;left:0;right:0;background:rgba(5,5,7,.97);flex-direction:column;padding:20px 28px;gap:16px;border-bottom:1px solid var(--crack);backdrop-filter:blur(20px)}
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <a href="/" class="nav-logo"><img src="logo.png" alt="OpenSculpt" style="height:32px"></a>
+  <div class="nav-r">
+    <a href="#problem">The Problem</a>
+    <a href="#arch">Architecture</a>
+    <a href="#evo">Evolution</a>
+    <a href="#join">Join</a>
+    <a href="war-stories.html">War Stories</a>
+    <a href="https://github.com/opensculpt/opensculpt/releases/latest" class="cta-sm" target="_blank" style="background:var(--gold);color:#080808;border-color:var(--gold)">Download</a>
+    <a href="https://github.com/opensculpt/opensculpt" class="cta-sm" target="_blank">GitHub</a>
+    <a href="https://github.com/opensculpt/opensculpt" class="cta-sm star-btn" target="_blank" style="background:var(--stone2);border-color:var(--dust);display:inline-flex;align-items:center;gap:5px">&#9733; Star</a>
+  </div>
+  <div class="nav-ham" onclick="document.querySelector('.nav-r').classList.toggle('show')">&#9776;</div>
+</nav>
+
+<!-- ═══════════════════════════════════════
+     HERO
+     ═══════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-text">
+      <h1>An OS that<br><em>evolves itself.</em><br>Help us build it.</h1>
+      <p class="sub">Linux for AI agents &mdash; but unlike Linux, when it breaks, it patches its own code and gets smarter. <strong>Your vibe coding tool is the chisel.</strong></p>
+      <div class="hero-btns">
+        <a href="https://github.com/opensculpt/opensculpt/releases/latest" class="btn btn-gold" target="_blank">⬇ Download for Windows</a>
+        <a href="#join" class="btn btn-ghost">Pick Up a Chisel</a>
+        <a href="#problem" class="btn btn-ghost">Why an OS?</a>
+        <a href="https://github.com/opensculpt/opensculpt" class="btn btn-ghost" target="_blank">GitHub</a>
+      </div>
+    </div>
+    <div class="faceoff">
+      <div class="mascot-row">
+        <img src="tux.svg" alt="Tux">
+        <div class="mascot-info">
+          <h3>Linux <span>(1991)</span></h3>
+          <p>Tux sits. Humans maintain it.</p>
+        </div>
+      </div>
+      <div class="vs-badge">vs</div>
+      <div class="mascot-row">
+        <img src="chip.jpg" alt="Chip" style="border-radius:14px">
+        <div class="mascot-info">
+          <h3>OpenSculpt <span>(2026)</span></h3>
+          <p>Chip sculpts itself. Your vibe coding tool is the chisel.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     THE PROBLEM
+     ═══════════════════════════════════════ -->
+<section class="wars" id="problem">
+  <div class="container">
+    <div class="sec-label">The problem</div>
+    <h2 class="sec-head">What happens without an OS</h2>
+    <p class="sec-sub">We ran 10 AI agents for 72 hours. Here's what happened when nothing managed them.</p>
+    <div class="wars-grid">
+      <div class="war reveal"><div class="war-tag res">Resources</div><h3>OOM Massacre</h3><p>10 agents spawned 50 containers. Nobody tracked ownership. 68GB RAM gone. Host dead by morning.</p><div class="unix">Like programs before Unix: no process table</div></div>
+      <div class="war reveal"><div class="war-tag life">Lifecycle</div><h3>Zombie Services</h3><p>Agent deploys CRM, reports "done", exits. 3 hours later CRM crashes. Dashboard still green.</p><div class="unix">Like daemons before systemd</div></div>
+      <div class="war reveal"><div class="war-tag mem">Memory</div><h3>Amnesiac Agents</h3><p>Agent 1 discovers the API. Agent 2 starts from zero. Same discovery, same cost. Every time.</p><div class="unix">Like programs before shared filesystems</div></div>
+      <div class="war reveal"><div class="war-tag cost">Budget</div><h3>Token Bonfire</h3><p>10 daemons polling at 3am. Answer: nothing. Cost: $86/day doing absolutely nothing.</p><div class="unix">Like busy-waiting before interrupts</div></div>
+      <div class="war reveal"><div class="war-tag trust">Honesty</div><h3>Green Lies</h3><p>Dashboard shows success. CRM dead. Database empty. Agent verified with the wrong command.</p><div class="unix">Like exit code 0 on a segfault</div></div>
+      <div class="war reveal"><div class="war-tag res">Identity</div><h3>No Process Model</h3><p>In every framework, agents are function calls. No PID, no budget, no permissions, no trail.</p><div class="unix">Like programs in DOS</div></div>
+    </div>
+    <p style="text-align:center;margin-top:28px;font-size:14px;color:var(--text-dim)">11 war stories. All real. All dated. <a href="war-stories.html">Read them all &rarr;</a></p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     ARCHITECTURE
+     ═══════════════════════════════════════ -->
+<section id="arch">
+  <div class="container">
+    <div class="sec-label">Architecture</div>
+    <h2 class="sec-head">An actual operating system</h2>
+    <p class="sec-sub">5 layers. The first 4 mirror Unix. Layer 5 has no equivalent.</p>
+    <div class="arch-stack">
+      <div class="arch-layer evo reveal"><div class="num">Layer 5</div><div><div class="name">Evolution Engine</div><div class="desc">Detects failures, reasons about gaps, generates fixes, deploys them.</div></div><div class="equiv">Nothing in Linux</div></div>
+      <div class="arch-layer reveal"><div class="num">Layer 4</div><div><div class="name">OS Agent (Shell)</div><div class="desc">LLM-powered brain. Interprets any command. Spawns agents.</div></div><div class="equiv">bash / zsh</div></div>
+      <div class="arch-layer reveal"><div class="num">Layer 3</div><div><div class="name">TheLoom (Memory)</div><div class="desc">Persistent knowledge. Skills, constraints, resolutions as .md files.</div></div><div class="equiv">ext4 / VFS</div></div>
+      <div class="arch-layer reveal"><div class="num">Layer 2</div><div><div class="name">Process Manager</div><div class="desc">Agent lifecycle: spawn, schedule, supervise, kill. Token budgets.</div></div><div class="equiv">PID / cgroups</div></div>
+      <div class="arch-layer reveal"><div class="num">Layer 1</div><div><div class="name">AgentRuntime (Kernel)</div><div class="desc">State machine. Event bus. Audit trail. Tool registry.</div></div><div class="equiv">kernel / syscalls</div></div>
+    </div>
+    <p class="arch-note">*Layer 5 is what makes it different: <strong>the OS evolves itself</strong></p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     SELF-EVOLUTION
+     ═══════════════════════════════════════ -->
+<section class="evo-sec" id="evo">
+  <div class="container">
+    <div class="sec-label">Self-evolution</div>
+    <h2 class="sec-head">Break it. Watch it fix itself. Try again.</h2>
+    <p class="sec-sub">When an agent fails, the OS reasons about the gap, writes a fix, and the same agent retries with that fix applied.</p>
+
+    <div class="evo-flow">
+      <div class="evo-node e1 reveal"><div class="evo-n">1</div><h4>Agent Fails</h4><p>Real failure from real demand</p></div>
+      <div class="evo-arr">&rarr;</div>
+      <div class="evo-node e2 reveal"><div class="evo-n">2</div><h4>OS Detects Gap</h4><p>Demand signal created</p></div>
+      <div class="evo-arr">&rarr;</div>
+      <div class="evo-node e3 reveal"><div class="evo-n">3</div><h4>Reasons About It</h4><p>Reads codebase + environment</p></div>
+      <div class="evo-arr">&rarr;</div>
+      <div class="evo-node e4 reveal"><div class="evo-n">4</div><h4>OS Evolves Itself</h4><p>Patches code, writes new tools</p></div>
+      <div class="evo-arr">&rarr;</div>
+      <div class="evo-node e5 reveal"><div class="evo-n">5</div><h4>Retry Succeeds</h4><p>Same agent. Reads fix first. Wins.</p></div>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><span class="term-dot d1"></span><span class="term-dot d2"></span><span class="term-dot d3"></span><span class="term-label">real evolution &mdash; march 28, 2026</span></div>
+      <div class="term-body">
+        <span class="t-dim"># User says:</span> "Install a CRM for my sales team"<br><br>
+        <span class="t-fail">&#10007; Agent tries Docker &mdash; no daemon available</span><br>
+        <span class="t-fail">&#10007; Agent tries Docker again &mdash; same failure</span><br>
+        <span class="t-fail">&#10007; 3 attempts, 200K tokens wasted</span><br><br>
+        <span class="t-detect">&#9670; Demand signal: "docker not available"</span><br>
+        <span class="t-detect">&#9670; OS reads environment: container, apt-get available</span><br><br>
+        <span class="t-fix">&#9998; Writes constraint: "No Docker. Use apt-get + pip."</span><br>
+        <span class="t-fix">&#9998; Saved to .opensculpt/constraints.md</span><br><br>
+        <span class="t-ok">&#10003; Agent retries &mdash; reads constraint first, skips Docker</span><br>
+        <span class="t-ok">&#10003; Installs CRM via apt-get. 5K tokens instead of 200K.</span><br>
+        <span class="t-ok">&#10003; Resolution saved. Every future retry knows.</span>
+      </div>
+    </div>
+    <p style="text-align:center;margin-top:20px;font-size:13px;color:var(--text-dim)">This is real. Not a mockup. <a href="war-stories.html#dead-infra">Read war story #11 &rarr;</a></p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     JOIN — One chisel started it
+     ═══════════════════════════════════════ -->
+<section id="join">
+  <div class="container">
+    <div class="join-head">
+      <div class="sec-label">Join the revolution</div>
+      <h2 class="sec-head" style="max-width:500px;margin-left:auto;margin-right:auto">One chisel started this. We need yours.</h2>
+      <p class="sec-sub" style="margin:12px auto 0">One person vibe coded the kernel, process manager, memory layer, and 11 war stories of fixes. But one chisel can only sculpt so much.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step reveal"><div class="step-n">1</div><h4>Run the OS</h4><p>Install it. Use it for real. Deploy a CRM, organize files, track spending.</p></div>
+      <div class="step reveal"><div class="step-n">2</div><h4>Watch it fail</h4><p>It will. Every failure creates a demand signal &mdash; a <code>.md</code> file saying what broke.</p></div>
+      <div class="step reveal"><div class="step-n">3</div><h4>Pick up your chisel</h4><p>Open your vibe coding tool. Say <em>"fix the top demand."</em> Your AI writes the fix.</p></div>
+      <div class="step reveal"><div class="step-n">4</div><h4>The stone gets sharper</h4><p>Your fix deploys. Knowledge syncs. The next person who hits that wall &mdash; doesn't.</p></div>
+    </div>
+
+    <div class="forge">
+      <h3>How do you sculpt?</h3>
+      <p class="forge-sub">Pick your path. We'll hand you the right chisel.</p>
+
+      <div class="forge-paths">
+        <!-- PATH 0: Just install it (.exe) -->
+        <div class="forge-path" onclick="openPath(this)" data-path="install" style="border-color:var(--gold)">
+          <div class="path-head">
+            <span class="path-icon">⬇️</span>
+            <div class="path-title">Just install it</div>
+            <div class="path-desc">Download the .exe — no code, no terminal</div>
+          </div>
+          <div class="path-tools">
+            <div class="crack-line"></div>
+            <a href="https://github.com/opensculpt/opensculpt/releases/latest" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('exe-download')">
+              <span class="tool-t-icon">🪟</span>
+              <div class="tool-t-info"><span class="tool-t-name">Windows (.exe)</span><span class="tool-t-action">download &amp; run — no dependencies</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+            <div class="forge-tool" style="opacity:.45;pointer-events:none">
+              <span class="tool-t-icon">🍎</span>
+              <div class="tool-t-info"><span class="tool-t-name">macOS</span><span class="tool-t-action">coming soon</span></div>
+              <span class="tool-t-arrow" style="font-size:11px">soon</span>
+            </div>
+            <div class="forge-tool" style="opacity:.45;pointer-events:none">
+              <span class="tool-t-icon">🐧</span>
+              <div class="tool-t-info"><span class="tool-t-name">Linux</span><span class="tool-t-action">coming soon</span></div>
+              <span class="tool-t-arrow" style="font-size:11px">soon</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- PATH 1: IDE users (the majority) -->
+        <div class="forge-path" onclick="openPath(this)" data-path="ide">
+          <div class="path-head">
+            <span class="path-icon">🔨</span>
+            <div class="path-title">I have an IDE</div>
+            <div class="path-desc">VS Code, Cursor, or Windsurf</div>
+          </div>
+          <div class="path-tools">
+            <div class="crack-line"></div>
+            <a href="vscode://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git" class="forge-tool" onclick="event.stopPropagation();trackChisel('vscode')">
+              <span class="tool-t-icon">⚡</span>
+              <div class="tool-t-info"><span class="tool-t-name">VS Code</span><span class="tool-t-action">clone &amp; open in one click</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+            <a href="cursor://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git" class="forge-tool" onclick="event.stopPropagation();trackChisel('cursor')">
+              <span class="tool-t-icon">🎯</span>
+              <div class="tool-t-info"><span class="tool-t-name">Cursor</span><span class="tool-t-action">clone &amp; open in one click</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+            <a href="windsurf://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git" class="forge-tool" onclick="event.stopPropagation();trackChisel('windsurf')">
+              <span class="tool-t-icon">🏄</span>
+              <div class="tool-t-info"><span class="tool-t-name">Windsurf</span><span class="tool-t-action">clone &amp; open in one click</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- PATH 2: Terminal warriors -->
+        <div class="forge-path" onclick="openPath(this)" data-path="terminal">
+          <div class="path-head">
+            <span class="path-icon">⌨️</span>
+            <div class="path-title">I live in the terminal</div>
+            <div class="path-desc">Claude Code, Aider, or Codex</div>
+          </div>
+          <div class="path-tools">
+            <div class="crack-line"></div>
+            <div class="forge-tool" onclick="event.stopPropagation();copyForge(this,'git clone https://github.com/OpenSculpt/opensculpt.git && cd opensculpt && claude')">
+              <span class="tool-t-icon">🔮</span>
+              <div class="tool-t-info"><span class="tool-t-name">Claude Code</span><span class="tool-t-action">git clone &amp; open</span></div>
+              <span class="tool-t-arrow" data-orig="copy">copy</span>
+            </div>
+            <div class="forge-tool" onclick="event.stopPropagation();copyForge(this,'git clone https://github.com/OpenSculpt/opensculpt.git && cd opensculpt && aider')">
+              <span class="tool-t-icon">🛠</span>
+              <div class="tool-t-info"><span class="tool-t-name">Aider</span><span class="tool-t-action">git clone &amp; open</span></div>
+              <span class="tool-t-arrow" data-orig="copy">copy</span>
+            </div>
+            <div class="forge-tool" onclick="event.stopPropagation();copyForge(this,'git clone https://github.com/OpenSculpt/opensculpt.git && cd opensculpt && codex')">
+              <span class="tool-t-icon">📦</span>
+              <div class="tool-t-info"><span class="tool-t-name">Codex</span><span class="tool-t-action">git clone &amp; open</span></div>
+              <span class="tool-t-arrow" data-orig="copy">copy</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- PATH 3: Explorers (no install) -->
+        <div class="forge-path" onclick="openPath(this)" data-path="browser">
+          <div class="path-head">
+            <span class="path-icon">🌐</span>
+            <div class="path-title">Just exploring</div>
+            <div class="path-desc">No install, open in browser</div>
+          </div>
+          <div class="path-tools">
+            <div class="crack-line"></div>
+            <a href="https://codespaces.new/OpenSculpt/opensculpt?quickstart=1" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('codespaces')">
+              <span class="tool-t-icon">☁️</span>
+              <div class="tool-t-info"><span class="tool-t-name">GitHub Codespaces</span><span class="tool-t-action">full dev environment in browser</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+            <a href="https://github.dev/OpenSculpt/opensculpt" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('githubdev')">
+              <span class="tool-t-icon">📝</span>
+              <div class="tool-t-info"><span class="tool-t-name">github.dev</span><span class="tool-t-action">browse &amp; edit code instantly</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+            <a href="https://gitpod.io/#https://github.com/OpenSculpt/opensculpt" target="_blank" class="forge-tool" onclick="event.stopPropagation();trackChisel('gitpod')">
+              <span class="tool-t-icon">🚀</span>
+              <div class="tool-t-info"><span class="tool-t-name">Gitpod</span><span class="tool-t-action">cloud workspace with terminal</span></div>
+              <span class="tool-t-arrow">&rarr;</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="math">
+      <div class="math-row">
+        <div><div class="math-n">1</div><div class="math-l">chisel</div></div>
+        <div class="math-op">=</div>
+        <div><div class="math-n">11</div><div class="math-l">war stories</div></div>
+        <div class="math-op">+</div>
+        <div><div class="math-n">5</div><div class="math-l">OS layers</div></div>
+        <div class="math-op">+</div>
+        <div><div class="math-n">9</div><div class="math-l">days</div></div>
+      </div>
+      <div class="math-cta">Now imagine <strong>100 chisels</strong>. Imagine <strong>1,000</strong>.</div>
+    </div>
+
+    <div class="fleet">
+      <strong>Linux had thousands of C programmers. We need thousands of vibe coders.</strong><br>
+      You don't need to know Python. You need a vibe coding tool and 10 minutes. Every environment is different &mdash; and each chisel teaches the OS something new.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     CTA
+     ═══════════════════════════════════════ -->
+<section class="final">
+  <img src="chip.jpg" alt="Chip" width="90" height="90" style="border-radius:20px">
+  <h2>In 1991, Linus posted:<br><em>"just a hobby, won't be big."</em></h2>
+  <p>Thousands picked up the chisel anyway. They shaped computing forever. This is that moment again &mdash; for intelligence. The revolution started. The stone is waiting.</p>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+    <a href="#join" class="btn btn-gold">Pick Up a Chisel</a>
+    <a href="https://codespaces.new/OpenSculpt/opensculpt?quickstart=1" class="btn btn-ghost" target="_blank">⚡ Open in Codespaces</a>
+    <a href="manifesto.html" class="btn btn-ghost">The Manifesto</a>
+    <a href="war-stories.html" class="btn btn-ghost">War Stories</a>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-l"><img src="logo.png" alt="" style="height:18px;opacity:.4"> OpenSculpt</div>
+  <div class="foot-r">
+    <a href="https://github.com/opensculpt/opensculpt" target="_blank">GitHub</a>
+    <a href="war-stories.html">War Stories</a>
+    <a href="manifesto.html">Manifesto</a>
+  </div>
+</footer>
+
+<script>
+// Nav scroll
+addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>40));
+
+// Smooth scroll
+document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();document.querySelector(a.getAttribute('href'))?.scrollIntoView({behavior:'smooth'})}));
+
+// Scroll reveal
+const ro=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('vis');ro.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>ro.observe(el));
+
+// Forge: progressive chisel selection
+function openPath(el){
+  const wasActive=el.classList.contains('active');
+  document.querySelectorAll('.forge-path').forEach(p=>p.classList.remove('active'));
+  if(!wasActive)el.classList.add('active');
+}
+
+// Copy command for terminal tools
+function copyForge(el,cmd){
+  navigator.clipboard?.writeText(cmd);
+  const arrow=el.querySelector('.tool-t-arrow');
+  if(arrow){arrow.textContent='copied!';arrow.style.color='var(--moss)'}
+  el.style.borderColor='var(--moss)';
+  setTimeout(()=>{el.style.borderColor='';if(arrow){arrow.textContent=arrow.dataset.orig||'copy';arrow.style.color=''}},1800)
+}
+
+// Track which IDE was clicked
+function trackChisel(ide){console.log('chisel:',ide)}
+</script>
+
+</body>
+</html>

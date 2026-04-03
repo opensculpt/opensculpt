@@ -1,12 +1,22 @@
-# OpenSculpt — The Self-Evolving Agentic OS
+<p align="center">
+  <img src="openSulpt_text.png" alt="OpenSculpt" width="500">
+</p>
 
-[![PyPI version](https://img.shields.io/pypi/v/opensculpt)](https://pypi.org/project/opensculpt/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/github/actions/workflow/status/opensculpt/opensculpt/ci.yml?label=tests)](https://github.com/opensculpt/opensculpt/actions)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/OpenSculpt/opensculpt?quickstart=1)
-[![Open in VS Code](https://img.shields.io/badge/Open%20in-VS%20Code-007ACC?logo=visual-studio-code&logoColor=white)](vscode://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git)
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/OpenSculpt/opensculpt)
+<h3 align="center">The Self-Evolving Agentic OS</h3>
+
+<p align="center">
+  <a href="https://github.com/opensculpt/opensculpt/stargazers"><img src="https://img.shields.io/github/stars/opensculpt/opensculpt?style=social" alt="GitHub Stars"></a>
+  <a href="https://pypi.org/project/opensculpt/"><img src="https://img.shields.io/pypi/v/opensculpt" alt="PyPI version"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
+  <a href="https://github.com/opensculpt/opensculpt/actions"><img src="https://img.shields.io/github/actions/workflow/status/opensculpt/opensculpt/ci.yml?label=tests" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="https://codespaces.new/OpenSculpt/opensculpt?quickstart=1"><img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces"></a>
+  <a href="vscode://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git"><img src="https://img.shields.io/badge/Open%20in-VS%20Code-007ACC?logo=visual-studio-code&logoColor=white" alt="Open in VS Code"></a>
+  <a href="https://gitpod.io/#https://github.com/OpenSculpt/opensculpt"><img src="https://gitpod.io/button/open-in-gitpod.svg" alt="Open in Gitpod"></a>
+</p>
 
 **Every failure is a chisel strike. Every fix reveals a better shape.** 🐧🪨
 

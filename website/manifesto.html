@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Manifesto — Why AI Agents Need an Operating System — OpenSculpt</title>
+<meta name="description" content="Linux gave programs identity, memory, and lifecycle. AI agents have none of that. OpenSculpt is the missing OS layer — and it evolves itself through vibe coding.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #08080A;
+  --bg2: #0E0E12;
+  --bg3: #16161C;
+  --border: #25252F;
+  --text: #C8C8D0;
+  --text2: #6B6B78;
+  --text3: #44444F;
+  --white: #F0F0F4;
+  --gold: #C9A84C;
+  --gold-dim: #8B7340;
+  --green: #3FBF8A;
+  --red: #E8643C;
+  --blue: #5B9FE8;
+  --purple: #A78BFA;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Outfit',sans-serif;font-weight:300;line-height:1.75;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;background:url("data:image/svg+xml,%3Csvg width='300' height='300' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence baseFrequency='0.65' numOctaves='4' type='fractalNoise'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");pointer-events:none;z-index:10000}
+h1,h2,h3,h4{font-family:'Fraunces',serif;font-optical-sizing:auto;color:var(--white);font-weight:600}
+a{color:var(--gold);text-decoration:none}a:hover{color:#E0C46C}
+code{font-family:'JetBrains Mono',monospace;font-size:0.88em;background:var(--bg3);padding:2px 6px;border-radius:3px}
+
+.back-link{position:fixed;top:20px;left:24px;z-index:100;font-size:13px;color:var(--text2)}.back-link:hover{color:var(--gold)}
+
+article{max-width:720px;margin:0 auto;padding:100px 24px 120px}
+article h1{font-size:clamp(2rem,5vw,3.2rem);line-height:1.12;margin-bottom:12px;font-weight:800}
+article h1 em{font-style:normal;background:linear-gradient(135deg,var(--gold) 20%,#E8D080 60%,var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:1.05rem;color:var(--text2);margin-bottom:48px;max-width:560px}
+
+article h2{font-size:1.5rem;margin:56px 0 16px;padding-top:32px;border-top:1px solid var(--border)}
+article h3{font-size:1.15rem;margin:32px 0 12px;color:var(--white)}
+article p{margin-bottom:20px;font-size:1.05rem}
+article strong{color:var(--white)}
+.muted{color:var(--text2)}
+
+.quote{border-left:3px solid var(--gold-dim);padding:20px 24px;margin:32px 0;background:var(--bg2);border-radius:0 8px 8px 0;font-size:1.1rem;font-family:'Fraunces',serif;color:var(--gold);line-height:1.5}
+
+/* Comparison table */
+.compare{width:100%;border-collapse:collapse;margin:28px 0;font-size:14px}
+.compare th{text-align:left;padding:10px 14px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);border-bottom:2px solid var(--border);font-family:'JetBrains Mono',monospace}
+.compare td{padding:10px 14px;border-bottom:1px solid var(--bg3)}
+.compare td:first-child{font-weight:500;color:var(--white);width:28%}
+.compare td:nth-child(2){color:var(--text2)}
+.compare td:nth-child(3){color:var(--green)}
+
+/* Timeline */
+.timeline{position:relative;margin:32px 0;padding-left:28px}
+.timeline::before{content:'';position:absolute;left:8px;top:0;bottom:0;width:2px;background:var(--border)}
+.tl-item{margin-bottom:24px;position:relative}
+.tl-item::before{content:'';position:absolute;left:-24px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--bg);border:2px solid var(--gold-dim)}
+.tl-item.active::before{background:var(--gold);border-color:var(--gold)}
+.tl-date{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text3);margin-bottom:2px}
+.tl-text{font-size:14px;color:var(--text)}
+.tl-text strong{color:var(--white)}
+
+/* Code block */
+.code-block{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8;margin:28px 0;overflow-x:auto}
+.code-block .dim{color:var(--text3)}
+.code-block .green{color:var(--green)}
+.code-block .gold{color:var(--gold)}
+.code-block .blue{color:var(--blue)}
+
+/* Evolution diagram */
+.evo-diagram{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:8px;margin:28px 0;text-align:center}
+.evo-box{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px 12px}
+.evo-box h4{font-size:0.9rem;margin-bottom:4px}
+.evo-box p{font-size:12px;color:var(--text2);margin:0}
+.evo-box.highlight{border-color:var(--gold-dim)}
+.evo-arrow{color:var(--text3);font-size:20px}
+
+/* Mascot face-off */
+.mascot-faceoff{display:flex;align-items:center;justify-content:center;gap:24px;margin:48px 0;padding:32px 0}
+.mascot-side{flex:1;padding:24px 20px;border:1px solid var(--border);border-radius:12px;transition:all 0.3s}
+.mascot-side.highlight{border-color:var(--gold-dim);background:rgba(201,168,76,0.03)}
+.mascot-top{display:flex;align-items:center;gap:16px}
+.mascot-pic{width:72px;height:72px;object-fit:contain;flex-shrink:0}
+.mascot-label{font-family:'Fraunces',serif;font-size:1.15rem;color:var(--white);font-weight:600;margin-bottom:2px}
+.mascot-yr{font-weight:400;color:var(--text3);font-size:0.85em}
+.mascot-sub{font-size:13px;color:var(--text2);line-height:1.4}
+.mascot-divider{display:flex;align-items:center}
+.mascot-vs-text{font-family:'Fraunces',serif;font-size:1.3rem;color:var(--text3)}
+.mascot-points{list-style:none;margin-top:16px;padding:0;font-size:14px;color:var(--text2)}
+.mascot-points li{margin-bottom:8px;padding-left:16px;position:relative}
+.mascot-points li::before{content:'';position:absolute;left:0;top:8px;width:5px;height:5px;border-radius:50%;background:var(--text3)}
+.mascot-side.highlight .mascot-points li::before{background:var(--gold)}
+.mascot-barrier{color:var(--white);font-weight:500;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);padding-left:0!important}
+.mascot-barrier::before{display:none!important}
+@media(max-width:500px){.mascot-faceoff{flex-direction:column;gap:12px}}
+
+.final{font-family:'Fraunces',serif;font-size:1.4rem;color:var(--white);text-align:center;margin:64px 0 32px;line-height:1.4}
+.final-accent{font-size:1.6rem;color:var(--gold)}
+
+.cta-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:40px}
+.btn{padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.25s;font-family:inherit;display:inline-block}
+.btn-gold{background:var(--gold);color:#0A0A0A}.btn-gold:hover{background:#D9B85C;transform:translateY(-1px)}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover{border-color:var(--text3);background:var(--bg3)}
+
+footer{border-top:1px solid var(--border);padding:40px 24px;text-align:center}
+.footer-links{display:flex;justify-content:center;gap:20px;margin-bottom:12px}
+.footer-links a{font-size:12px;color:var(--text3)}.footer-links a:hover{color:var(--gold)}
+.footer-copy{font-size:12px;color:var(--text3)}
+
+@media(max-width:600px){
+  .evo-diagram{grid-template-columns:1fr;gap:4px}
+  .evo-arrow{transform:rotate(90deg)}
+  .compare td,.compare th{padding:8px 10px;font-size:13px}
+}
+</style>
+</head>
+<body>
+
+<a href="index.html" class="back-link"><img src="logo.png" alt="OpenSculpt" style="height:22px;vertical-align:middle;margin-right:6px;opacity:0.7"> Home</a>
+
+<article>
+
+<h1>Why AI Agents Need<br>an <em>Operating System</em></h1>
+<p class="hero-sub">And why the people building it won't write a single line of code themselves.</p>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>The problem nobody talks about</h2>
+
+<p>Every week there's a new agent framework. LangChain, CrewAI, AutoGen, OpenHands, Devin. They all solve the same problem: <strong>how do I make an LLM call tools?</strong></p>
+
+<p>None of them solve this: <strong>what happens after the agent finishes?</strong></p>
+
+<p>Who monitors the service it deployed? Who cleans up the containers it spawned? Who remembers what it learned? Who stops it from burning $86/day polling at 3am? Who notices when the dashboard says green but the service is dead?</p>
+
+<p class="muted">We ran 10 agents for 72 hours and found out. They crashed the host. They orphaned 50 containers. They forgot everything between runs. They lied about success. <a href="war-stories.html">All 11 war stories are documented.</a></p>
+
+<div class="quote">Agents without an OS are like programs in DOS.<br>They run. They exit. Nothing manages what happens next.</div>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>What Linux did for programs</h2>
+
+<p>Before Unix, programs allocated memory directly. When they crashed, memory leaked. There was no process table, no filesystem, no permissions, no scheduling. Every program had to manage its own resources.</p>
+
+<p>Unix (and later Linux) created the <strong>operating system layer</strong>: process identity, lifecycle management, shared filesystems, resource limits, permission models, scheduling, inter-process communication. Programs didn't have to think about infrastructure anymore.</p>
+
+<p><strong>AI agents today are in the pre-Unix era.</strong></p>
+
+<table class="compare">
+  <thead>
+    <tr><th>Concept</th><th>Programs (pre-Unix)</th><th>OpenSculpt for Agents</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Identity</td><td>No PID, no tracking</td><td>Agent ID, state machine, audit trail</td></tr>
+    <tr><td>Memory</td><td>Direct allocation, leaks</td><td>TheLoom: persistent skills, constraints, resolutions</td></tr>
+    <tr><td>Lifecycle</td><td>Run and pray</td><td>Spawn, schedule, supervise, kill, restart</td></tr>
+    <tr><td>Resources</td><td>No limits, no cleanup</td><td>Token budgets, memory limits, GC daemon</td></tr>
+    <tr><td>Monitoring</td><td>None</td><td>DomainDaemons: service health, auto-restart</td></tr>
+    <tr><td>Permissions</td><td>Full access to everything</td><td>Capability gates, tool ACLs, guard rails</td></tr>
+    <tr><td>Communication</td><td>Shared memory hacks</td><td>Event bus, A2A protocol, MCP integration</td></tr>
+    <tr><td>Evolution</td><td>Doesn't exist</td><td>Demand-driven self-evolution (the new layer)</td></tr>
+  </tbody>
+</table>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>The layer that doesn't exist in Linux</h2>
+
+<p>OpenSculpt has 5 layers. The first 4 mirror Unix: kernel, process manager, filesystem, shell. Layer 5 is new: <strong>the evolution engine.</strong></p>
+
+<p>When an agent fails, the OS doesn't just log it. It:</p>
+
+<div class="evo-diagram">
+  <div class="evo-box">
+    <h4>Detects the gap</h4>
+    <p>Demand signal created from real user failure</p>
+  </div>
+  <div class="evo-arrow">&rarr;</div>
+  <div class="evo-box highlight">
+    <h4>Reasons about it</h4>
+    <p>LLM reads codebase + environment + past fixes</p>
+  </div>
+  <div class="evo-arrow">&rarr;</div>
+  <div class="evo-box">
+    <h4>Writes the fix</h4>
+    <p>New tool, constraint, or code patch. Tested. Deployed.</p>
+  </div>
+</div>
+
+<p>This isn't hypothetical. On March 28, 2026, our agents wasted 200K tokens trying Docker in a container with no Docker daemon. The evolution engine detected the pattern, wrote a constraint (<code>"No Docker. Use apt-get."</code>), and the next agent read it first and succeeded in 5K tokens. <a href="war-stories.html#dead-infra">War story #11.</a></p>
+
+<div class="quote">Every failure is a chisel strike. The OS sculpts itself.</div>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>How it actually evolves</h2>
+
+<p>There are two evolution paths, and they work together:</p>
+
+<h3>Auto-evolution (the OS fixes itself)</h3>
+
+<p>The DemandSolver runs inside the OS. When failures repeat, it uses an LLM to reason about what's missing. It can:</p>
+<p>&bull; <strong>Write constraints</strong> &mdash; "Docker not available in this environment" (prevents future agents from trying)<br>
+&bull; <strong>Write resolutions</strong> &mdash; "When Docker unavailable, use apt-get + pip" (teaches future agents the workaround)<br>
+&bull; <strong>Create tools</strong> &mdash; generates new capabilities the OS was missing<br>
+&bull; <strong>Patch code</strong> &mdash; modifies existing modules to fix bugs<br>
+&bull; <strong>Escalate to user</strong> &mdash; "I've failed 6 times. I need your help."</p>
+
+<h3>Vibe coding (humans point AI at the codebase)</h3>
+
+<p>When the OS escalates, or when you want to contribute, you don't write code. You point your AI coding tool at it:</p>
+
+<div class="code-block">
+<span class="dim"># See what the OS needs</span><br>
+<span class="gold">$ sculpt demands</span><br>
+<br>
+<span class="green">ACTIVE</span> docker_not_available (6 attempts, escalated)<br>
+<span class="green">ACTIVE</span> browser_tool_missing (2 attempts)<br>
+<span class="blue">RESOLVED</span> environment_probe_missing (auto-fixed)<br>
+<br>
+<span class="dim"># Point your vibe coding tool at it (Cursor, Windsurf, Claude Code, Copilot...)</span><br>
+<span class="dim"># "Read .opensculpt/DEMANDS.md and fix the top demand"</span><br>
+<span class="dim"># Your AI reads the codebase, understands the architecture,</span><br>
+<span class="dim"># and writes the fix. You review. It deploys.</span><br>
+<br>
+<span class="dim"># Share with the fleet</span><br>
+<span class="gold">$ sculpt contribute</span>
+</div>
+
+<p><strong>100 users = 100 AI coding instances evolving the OS simultaneously.</strong> Each learns from its own environment. Knowledge syncs as <code>.md</code> files. Code stays local &mdash; because a Raspberry Pi fix won't compile on a cloud VM. But the <em>insight</em> transfers everywhere.</p>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>Why this is different from every other project</h2>
+
+<p><strong>It's not a framework.</strong> Frameworks give you tools to build agents. OpenSculpt manages agents after they're built &mdash; like the difference between a compiler and an operating system.</p>
+
+<p><strong>It's not a product.</strong> Products have features. OpenSculpt has demands. When users hit a wall, the wall becomes a demand signal, and the OS (or a vibe coder) sculpts a fix. The "feature list" is whatever users need.</p>
+
+<p><strong>It's not static.</strong> Every other open-source project evolves through human PRs. OpenSculpt evolves through AI coding tools reading demand signals and writing fixes. The barrier to contributing isn't "can you write kernel code?" &mdash; it's "can you talk to an AI?"</p>
+
+<div class="quote">Linux needed C programmers. OpenSculpt needs vibe coders.</div>
+
+<!-- Mascot face-off -->
+<div class="mascot-faceoff">
+  <div class="mascot-side">
+    <div class="mascot-top">
+      <img src="tux.svg" alt="Tux" class="mascot-pic">
+      <div>
+        <div class="mascot-label">Linux <span class="mascot-yr">(1991)</span></div>
+        <div class="mascot-sub">Tux sits. Humans maintain it.</div>
+      </div>
+    </div>
+    <ul class="mascot-points">
+      <li>Read the kernel mailing list</li>
+      <li>Understand C and POSIX</li>
+      <li>Write a driver or patch</li>
+      <li>Submit to Linus for review</li>
+      <li class="mascot-barrier">Barrier: 10 years of C experience</li>
+    </ul>
+  </div>
+  <div class="mascot-divider">
+    <div class="mascot-vs-text">vs</div>
+  </div>
+  <div class="mascot-side highlight">
+    <div class="mascot-top">
+      <img src="chip.jpg" alt="Chip" class="mascot-pic" style="border-radius:14px">
+      <div>
+        <div class="mascot-label">OpenSculpt <span class="mascot-yr">(2026)</span></div>
+        <div class="mascot-sub">Chip sculpts itself. Every failure is a chisel strike.</div>
+      </div>
+    </div>
+    <ul class="mascot-points">
+      <li>Run the OS. Use it. Let it fail.</li>
+      <li>Failures become demand signals (.md files)</li>
+      <li>Point your vibe coding tool at it</li>
+      <li>AI reads demands + codebase, writes fix</li>
+      <li class="mascot-barrier">Barrier: can you talk to an AI?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>The timeline</h2>
+
+<div class="timeline">
+  <div class="tl-item">
+    <div class="tl-date">March 24, 2026</div>
+    <div class="tl-text"><strong>First commit.</strong> Kernel, OS agent, basic evolution. One scenario tested.</div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-date">March 26, 2026</div>
+    <div class="tl-text"><strong>First real scenario.</strong> "Run sales for my startup." 6 bugs found. All real. Green ticks on failures, recursive goals, infinite loops.</div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-date">March 28, 2026</div>
+    <div class="tl-text"><strong>OOM Massacre.</strong> 10 containers overnight, 68GB RAM dead. Built GC daemon, resource ownership, memory limits. <a href="war-stories.html#oom-massacre">War story #1.</a></div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-date">March 29, 2026</div>
+    <div class="tl-text"><strong>Evolution engine rebuilt.</strong> Demand-driven, not random arxiv papers. DemandSolver with real actions: patch, create tool, write constraints.</div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-date">March 30, 2026</div>
+    <div class="tl-text"><strong>LLM-native rewrite.</strong> Deleted SQLite stores. Everything is <code>.md</code> files the LLM reads directly. The LLM IS the search engine.</div>
+  </div>
+  <div class="tl-item active">
+    <div class="tl-date">April 2, 2026</div>
+    <div class="tl-text"><strong>Today.</strong> 5 OS layers, 20 scenarios, 11 war stories, 8 token optimizations, fleet sync protocol. Looking for vibe coders.</div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-date">Next</div>
+    <div class="tl-text"><strong>Fleet learning.</strong> 100+ instances sharing constraints and resolutions. Constraint diversity (10 environment profiles). Windows + Mac native support.</div>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────── -->
+<h2>Join the revolution</h2>
+
+<p>You don't need to understand kernel internals. You don't need 10 years of systems programming. You need to be able to talk to an AI coding tool.</p>
+
+<p>Run the OS. Use it. Let it fail. Point your AI at the demands. Watch it write the fix. Contribute the knowledge back. That's it.</p>
+
+<p class="final">The people who built Linux in 1991<br>shaped computing forever.</p>
+<p class="final final-accent">The people who build OpenSculpt in 2026<br>will shape intelligence forever.</p>
+
+<div class="cta-row">
+  <a href="https://github.com/opensculpt/opensculpt" class="btn btn-gold" target="_blank">Start on GitHub</a>
+  <a href="war-stories.html" class="btn btn-outline">Read the War Stories</a>
+  <a href="index.html" class="btn btn-outline">Back to Home</a>
+</div>
+
+</article>
+
+<footer>
+  <div class="footer-links">
+    <a href="index.html">Home</a>
+    <a href="war-stories.html">War Stories</a>
+    <a href="https://github.com/opensculpt/opensculpt" target="_blank">GitHub</a>
+  </div>
+  <p class="footer-copy">OpenSculpt &mdash; The Self-Evolving Agentic OS &mdash; Apache 2.0</p>
+</footer>
+
+</body>
+</html>

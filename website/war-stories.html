@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>War Stories — 11 Failures That Built an OS — OpenSculpt</title>
+<meta name="description" content="We ran AI agents for 72 hours. OOM massacre, zombie services, amnesiac agents, token bonfires. Every failure became an OS feature. Real dates, real bugs, real fixes.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #08080A;
+  --bg2: #0E0E12;
+  --bg3: #16161C;
+  --border: #25252F;
+  --text: #C8C8D0;
+  --text2: #6B6B78;
+  --text3: #44444F;
+  --white: #F0F0F4;
+  --gold: #C9A84C;
+  --gold-dim: #8B7340;
+  --green: #3FBF8A;
+  --red: #E8643C;
+  --blue: #5B9FE8;
+  --purple: #A78BFA;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Outfit',sans-serif;font-weight:300;line-height:1.7;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;background:url("data:image/svg+xml,%3Csvg width='300' height='300' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence baseFrequency='0.65' numOctaves='4' type='fractalNoise'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");pointer-events:none;z-index:10000}
+h1,h2,h3,h4{font-family:'Fraunces',serif;font-optical-sizing:auto;color:var(--white);font-weight:600}
+a{color:var(--gold);text-decoration:none}a:hover{color:#E0C46C}
+code{font-family:'JetBrains Mono',monospace;font-size:0.88em;background:var(--bg3);padding:2px 6px;border-radius:3px}
+
+.back-link{position:fixed;top:20px;left:24px;z-index:100;font-size:13px;color:var(--text2)}.back-link:hover{color:var(--gold)}
+
+.page-header{max-width:860px;margin:0 auto;padding:100px 24px 60px;text-align:center}
+.page-header h1{font-size:clamp(2rem,5vw,3rem);margin-bottom:16px;font-weight:800}
+.page-header h1 em{font-style:normal;background:linear-gradient(135deg,var(--gold) 20%,#E8D080 60%,var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.page-header p{color:var(--text2);font-size:1.05rem;max-width:600px;margin:0 auto}
+
+.stories{max-width:860px;margin:0 auto;padding:0 24px 80px}
+
+/* ─── STORY CARDS ──── */
+.story{margin-bottom:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color 0.3s}
+.story:hover{border-color:#35353F}
+
+.story-header{padding:24px 28px;cursor:pointer;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.story-header:hover{background:rgba(201,168,76,0.015)}
+
+.story-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.story-date{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)}
+.story-tag{padding:3px 10px;border-radius:4px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:0.05em}
+.tag-resource{background:rgba(232,100,60,0.1);color:var(--red)}
+.tag-lifecycle{background:rgba(63,191,138,0.1);color:var(--green)}
+.tag-memory{background:rgba(91,159,232,0.1);color:var(--blue)}
+.tag-honesty{background:rgba(201,168,76,0.1);color:var(--gold)}
+.tag-budget{background:rgba(232,100,60,0.1);color:var(--red)}
+.tag-testing{background:rgba(139,115,64,0.1);color:var(--gold-dim)}
+.tag-evolution{background:rgba(167,139,250,0.1);color:var(--purple)}
+.tag-arch{background:rgba(91,159,232,0.1);color:var(--blue)}
+.tag-infra{background:rgba(139,115,64,0.1);color:var(--gold-dim)}
+
+.story-title h3{font-size:1.15rem;margin-bottom:4px}
+.story-oneliner{font-size:14px;color:var(--text2)}
+.story-toggle{font-size:20px;color:var(--text3);transition:transform 0.3s;flex-shrink:0;margin-top:4px}
+.story.open .story-toggle{transform:rotate(45deg)}
+
+.story-body{display:none;padding:0 28px 28px;border-top:1px solid var(--border)}
+.story.open .story-body{display:block}
+.story-body p{margin:16px 0;font-size:15px}
+.story-body strong{color:var(--white)}
+
+.os-box{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin:16px 0}
+.os-box-label{font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;font-weight:600;font-family:'JetBrains Mono',monospace}
+.os-box-label.unix{color:var(--text3)}
+.os-box-label.fix{color:var(--green)}
+.os-box-label.lesson{color:var(--gold-dim)}
+.os-box-label.evo{color:var(--purple)}
+.os-box p{margin:4px 0;font-size:14px}
+
+/* ─── PATTERN TABLE ──── */
+.table-section{margin:60px 0 40px}
+.table-section h2{text-align:center;font-size:1.5rem;margin-bottom:8px}
+.table-section>p{text-align:center;color:var(--text2);font-size:14px;margin-bottom:28px}
+
+.pattern-table{width:100%;border-collapse:collapse;font-size:13px}
+.pattern-table th{text-align:left;padding:10px 14px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);border-bottom:2px solid var(--border);font-family:'JetBrains Mono',monospace}
+.pattern-table td{padding:10px 14px;border-bottom:1px solid var(--bg3)}
+.pattern-table td:first-child{font-weight:500;color:var(--white)}
+.pattern-table td:nth-child(2){color:var(--text2)}
+.pattern-table td:nth-child(3){font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text3)}
+.pattern-table td:nth-child(4){color:var(--green);font-size:12px}
+.pattern-table tr:hover td{background:var(--bg2)}
+
+/* ─── CONCLUSION ──── */
+.conclusion{text-align:center;padding:60px 24px;border-top:1px solid var(--border);margin-top:40px}
+.conclusion h2{font-size:1.6rem;margin-bottom:16px}
+.conclusion p{color:var(--text2);max-width:560px;margin:0 auto 24px;font-size:1rem}
+.btn{padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.25s;font-family:inherit;display:inline-flex;align-items:center;gap:8px}
+.btn-gold{background:var(--gold);color:#0A0A0A}.btn-gold:hover{background:#D9B85C;transform:translateY(-1px)}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover{border-color:var(--text3);background:var(--bg3)}
+
+footer{border-top:1px solid var(--border);padding:32px 24px;max-width:860px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.footer-left{font-family:'Fraunces',serif;font-size:0.85rem;color:var(--text3);display:flex;align-items:center;gap:8px}
+.footer-links{display:flex;gap:18px}
+.footer-links a{font-size:11px;color:var(--text3)}.footer-links a:hover{color:var(--gold)}
+
+@media(max-width:768px){
+  .pattern-table{font-size:12px}
+  .pattern-table th,.pattern-table td{padding:8px 10px}
+  .story-header{padding:20px}
+  .story-body{padding:0 20px 20px}
+}
+</style>
+</head>
+<body>
+
+<a href="index.html" class="back-link"><img src="logo.png" alt="OpenSculpt" style="height:22px;vertical-align:middle;margin-right:6px;opacity:0.7"> Home</a>
+
+<div class="page-header">
+  <h1>11 Failures That <em>Built an OS</em></h1>
+  <p>We ran AI agents for 72 hours. Everything broke. Every failure became an OS feature. Real dates, real bugs, real fixes. Every chisel strike sculpted something better.</p>
+</div>
+
+<div class="stories">
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- Story 1 -->
+<div class="story" id="oom-massacre">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-28</span><span class="story-tag tag-resource">Resource Management</span></div>
+      <div class="story-title"><h3>1. The OOM Massacre</h3></div>
+      <div class="story-oneliner">10 containers, 68GB RAM, all dead by morning.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>We deployed 10 agent containers overnight. Each spawned Docker containers for CRMs, databases, APIs. By morning, the host was dead. <strong>68GB of RAM exhausted.</strong> Windows warned the user. The agents didn't notice.</p>
+    <p>Why? <strong>Agents are ephemeral. Resources are not.</strong> An agent spawns a container, finishes, exits. The container keeps running. Nobody watches it. 10 agents x 3-5 containers x 8 hours = 50 orphaned processes eating RAM.</p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Programs before Unix allocated memory directly. When a program crashed, memory leaked. No garbage collector. No process table tracking ownership.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>GC daemon with memory pressure monitoring. Phase-scoped cleanup (<code>kill -PGID</code> pattern). Hierarchical resource ownership: Goal &rarr; Phase &rarr; Resource. Shell auto-detection registers spawned containers. Memory limits on all spawned processes.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 2 -->
+<div class="story" id="zombie-services">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-27</span><span class="story-tag tag-lifecycle">Lifecycle</span></div>
+      <div class="story-title"><h3>2. The Zombie Services</h3></div>
+      <div class="story-oneliner">Deploy and walk away. Service dies silently. Nobody notices.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>Agent deploys CRM on port 8081. Reports "done." Exits. Three hours later, CRM crashes silently. Dashboard still green. User tries to access &mdash; nothing.</p>
+    <p>In every agent framework, <strong>deployment = task complete</strong>. In an OS, deployment = the beginning of lifecycle management.</p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Daemons before <code>init</code>/<code>systemd</code>: if a background process died, nobody restarted it. No watchdog. No health checks.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>DomainDaemons that outlive the agent. Service lifecycle: deploy &rarr; monitor &rarr; restart &rarr; alert. Like <code>systemd</code> for AI agents. Two-phase gating: cheap health check first, LLM only when needed.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 3 -->
+<div class="story" id="amnesiac-agents">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-27</span><span class="story-tag tag-memory">Memory</span></div>
+      <div class="story-title"><h3>3. The Amnesiac Agents</h3></div>
+      <div class="story-oneliner">Agent 1 learns the API. Agent 2 starts from zero. 200K tokens wasted.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>Agent #1 discovers the CRM API at <code>/api/v1/Lead</code> with admin credentials. 15 minutes. 200K tokens. Agent #1 exits. Agent #2 needs to "add 3 leads." Starts from zero. <strong>Same discovery. Same cost. Every single time.</strong></p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Programs before shared filesystems: every program had its own data format, its own storage. No way to share knowledge between processes.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>TheLoom &mdash; three-layer persistent memory. Agents save <code>SKILL.md</code> files. Next agent reads the skill first. <strong>5K tokens instead of 200K. 40x cheaper.</strong> The LLM reads markdown directly &mdash; no database, no indexing.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 4 -->
+<div class="story" id="green-lies">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-26</span><span class="story-tag tag-honesty">Honesty</span></div>
+      <div class="story-title"><h3>4. The Green Lies</h3></div>
+      <div class="story-oneliner">Dashboard green. CRM dead. Database empty. API returning 500s.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>Agent tries Docker (not available). Fails. Verify command also uses Docker. Also fails. GoalRunner retries forever. Meanwhile, the agent found a workaround &mdash; CRM is actually running via apt-get. <strong>Dashboard shows red. Reality is green. Or vice versa.</strong></p>
+    <p>The LLM wrote the verify command. The LLM got it wrong. Nobody checks the checker.</p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Programs returning exit code 0 when they segfault. No distinction between "I succeeded" and "I think I succeeded."</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>Three-tier verification: <strong>auto</strong> (shell check), <strong>ask_user</strong> (human confirms), <strong>none</strong> (honest yellow). Smart diagnosis rewrites bad verify commands. Evidence-based: if verify fails but processes are running, investigate before declaring failure.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 5 -->
+<div class="story" id="infinite-loop">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-27</span><span class="story-tag tag-evolution">Evolution</span></div>
+      <div class="story-title"><h3>5. The Infinite Evolution Loop</h3></div>
+      <div class="story-oneliner">Evolution activates same broken tool. Forever. Burning tokens.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>Demand: "capability_gap: docker_management." Evolution activates Docker tool. Docker doesn't work (no daemon). Demand fires again. Evolution activates same tool. <strong>Infinite loop.</strong> Every cycle burned tokens doing exactly the same thing.</p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Retry without backoff. No state tracking. No escalation path.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>Demand lifecycle with states: <strong>active &rarr; attempting &rarr; escalated &rarr; resolved</strong>. Exponential backoff (1min, 2min, 4min...). Auto-escalation to user after 6 failed attempts. 5-pattern stuck detector (from OpenHands research): repeating tool calls, identical outputs, error-only loops, ping-pong oscillation.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 6 -->
+<div class="story" id="token-bonfire">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-28</span><span class="story-tag tag-budget">Budget</span></div>
+      <div class="story-title"><h3>6. The Token Bonfire</h3></div>
+      <div class="story-oneliner">10 daemons polling at 3am. Answer: nothing. Cost: $86/day.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>DomainDaemons run LLM calls every 30 seconds. At 3am with no activity, the answer is always "no." <strong>10 daemons x 120 calls/hour x $0.003 = $3.60/hour doing nothing.</strong></p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Busy-waiting before interrupts. The CPU spins checking "anything new?" millions of times per second instead of sleeping until an event fires.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>Two-phase gating. <code>fast_check()</code> is cheap (HTTP/API, zero LLM). Only if <code>needs_attention=true</code> does the expensive LLM tick fire. Sleep tiers: active (30s), idle (5min), dormant (1hr). <strong>$0.10/day instead of $86/day.</strong></p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 7 -->
+<div class="story" id="token-hoarders">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-28</span><span class="story-tag tag-budget">Budget</span></div>
+      <div class="story-title"><h3>7. The Token Hoarders</h3></div>
+      <div class="story-oneliner">Agent burns 50K tokens on a 5K task. Nobody tracks spending.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>A human employee who spent 10x budget on a simple task would get fired. Agents? Nobody even knows what they spend. No per-agent accounting. No budgets. No "you're over budget, stop."</p>
+    <div class="os-box">
+      <div class="os-box-label unix">The pre-Unix equivalent</div>
+      <p>Programs before <code>ulimit</code> and <code>cgroups</code>: one runaway process could consume all system resources with no limit.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>Per-agent token budgets (50K default). Session compaction. Observation masking (strip verbose tool output). Dynamic tool pruning (only show relevant tools per command). Cost-aware model routing (Haiku for diagnosis, Sonnet for planning). <strong>200K &rarr; 5K for repeated tasks.</strong></p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 8 -->
+<div class="story" id="not-first-class">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-28</span><span class="story-tag tag-arch">Architecture</span></div>
+      <div class="story-title"><h3>8. Agents Aren't First-Class Citizens</h3></div>
+      <div class="story-oneliner">The root cause of all 7 stories above.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>In every framework &mdash; LangChain, CrewAI, AutoGen, OpenHands &mdash; agents are function calls. No identity, no lifecycle, no budget, no permissions, no persistence, no audit trail.</p>
+    <p><strong>Agents in frameworks are like programs in DOS.</strong> They run. They exit. Nobody manages what happens between or after.</p>
+    <p><strong>In OpenSculpt, agents are first-class citizens</strong> &mdash; like Unix processes: identity (agent ID), lifecycle state machine (spawned &rarr; running &rarr; blocked &rarr; done), resource ownership (containers, files, services), token budgets (per-agent accounting), capability gates (what tools you can use), supervision (parent tracks children), persistent memory (TheLoom), and immutable audit trail.</p>
+    <div class="os-box">
+      <div class="os-box-label evo">The OS insight</div>
+      <p>You can't bolt process management onto a framework. You can't add lifecycle to function calls. You need a fundamentally different architecture: an operating system where agents are the unit of execution, not functions.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 9 -->
+<div class="story" id="814-tests">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-27</span><span class="story-tag tag-testing">Testing</span></div>
+      <div class="story-title"><h3>9. 814 Tests Pass. Product Completely Broken.</h3></div>
+      <div class="story-oneliner">pytest green. Every real scenario fails. Unit tests mock everything.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>814 unit tests passed. Then we ran the actual product: green ticks on failures, recursive goal spawning, evolution infinite loops, fake improvement counts. <strong>814 tests. Zero real-world scenarios verified.</strong></p>
+    <p>Unit tests mock the LLM. Mock the shell. Mock the filesystem. The mocks all return success. The real world doesn't.</p>
+    <div class="os-box">
+      <div class="os-box-label lesson">The lesson</div>
+      <p>Unit tests are necessary but wildly insufficient for agentic systems. The OS now requires E2E scenario testing: deploy in Docker, send real commands via Playwright, verify the service actually works. <strong>If you can't curl it, it's not deployed.</strong></p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 10 -->
+<div class="story" id="idle-evolution">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-29</span><span class="story-tag tag-evolution">Evolution</span></div>
+      <div class="story-title"><h3>10. Evolution Spent 32 Cycles Achieving Nothing</h3></div>
+      <div class="story-oneliner">14 evolved .py files. Zero used. Pure waste.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>The evolution engine ran 32 cycles overnight. It generated 14 Python files. <strong>None were ever imported, called, or used.</strong> It scanned arxiv papers about video security while the user was trying to deploy a CRM.</p>
+    <p>Evolution always picked the easy path &mdash; writing documentation instead of code &mdash; because the prompt rewarded "any improvement" equally.</p>
+    <div class="os-box">
+      <div class="os-box-label fix">What the OS evolved</div>
+      <p>Complete rewrite: evolution is now <strong>demand-driven</strong>. No demands = no token burn. DemandSolver uses LLM reasoning: reads the codebase, reads the environment, reads past fixes, then decides what to build. MetaEvolver (random mutation) disabled. Only real user failures trigger evolution.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label evo">The self-evolution insight</div>
+      <p>Evolution without accountability is waste. Every evolved artifact must have a caller. Every cycle must address a real demand. The evolution engine itself had to evolve &mdash; from random paper scanning to demand-driven problem solving.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Story 11 -->
+<div class="story" id="dead-infra">
+  <div class="story-header" onclick="this.parentElement.classList.toggle('open')">
+    <div>
+      <div class="story-meta"><span class="story-date">2026-03-30</span><span class="story-tag tag-infra">Dead Code</span></div>
+      <div class="story-title"><h3>11. The Constraint Store That Nobody Called</h3></div>
+      <div class="story-oneliner">Beautiful SQLite infrastructure. Zero callers. Dashboard shows "0 constraints." Nobody notices.</div>
+    </div>
+    <span class="story-toggle">+</span>
+  </div>
+  <div class="story-body">
+    <p>Built a SQLite constraint learning system. ConstraintStore class, ResolutionCache class, async methods, test coverage. Initialized on boot. Wired into architecture docs. <strong>Neither was ever called from running code.</strong> Zero constraints stored. Zero resolutions cached. Federation synced nothing.</p>
+    <p>The dashboard showed "0 constraints, 0 resolutions" for days. Nobody questioned why the OS hadn't learned anything.</p>
+    <div class="os-box">
+      <div class="os-box-label lesson">The lesson</div>
+      <p>Dead infrastructure is worse than no infrastructure. It creates the illusion of capability. Every component must have a CALLER. Audit: trace from user action &rarr; event &rarr; component &rarr; persistence. If any link is missing, it's dead code. Delete it.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label fix">The fix (24 hours later)</div>
+      <p>Deleted SQLite stores entirely. Replaced with <code>.opensculpt/constraints.md</code> and <code>.opensculpt/resolutions.md</code> &mdash; plain text the LLM reads directly. <strong>The LLM IS the search engine.</strong> No indexes, no queries, no cosine similarity. Wired actual WRITING: pre-flight failures write constraints. Successful retries write resolutions. Now the OS actually learns.</p>
+    </div>
+    <div class="os-box">
+      <div class="os-box-label evo">The LLM-native insight</div>
+      <p>An agentic OS powered by LLMs should store knowledge as text the LLM can read &mdash; not as database rows that need a query layer. <code>.md</code> files beat SQLite when the reader is an LLM.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- Pattern Table -->
+<div class="table-section">
+  <h2>Every failure = a missing OS feature</h2>
+  <p>The pattern is clear: agents need the same infrastructure that programs got from Unix.</p>
+
+  <table class="pattern-table">
+    <thead>
+      <tr><th>Failure</th><th>Missing OS Feature</th><th>Linux Equivalent</th><th>OpenSculpt Fix</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>OOM Massacre</td><td>Resource lifecycle</td><td>Process table + GC</td><td>GC daemon + hierarchical ownership</td></tr>
+      <tr><td>Zombie Services</td><td>Service monitoring</td><td>init / systemd</td><td>DomainDaemons + auto-restart</td></tr>
+      <tr><td>Amnesiac Agents</td><td>Shared memory</td><td>Filesystem (ext4)</td><td>TheLoom + SKILL.md</td></tr>
+      <tr><td>Green Lies</td><td>Honest verification</td><td>Exit codes + signals</td><td>Smart diagnosis + 3-tier verify</td></tr>
+      <tr><td>Infinite Loop</td><td>Demand lifecycle</td><td>Retry + backoff</td><td>Demand states + escalation</td></tr>
+      <tr><td>Token Bonfire</td><td>Efficient scheduling</td><td>cron + interrupts</td><td>fast_check + sleep tiers</td></tr>
+      <tr><td>Token Hoarders</td><td>Resource quotas</td><td>ulimit + cgroups</td><td>Budgets + compaction</td></tr>
+      <tr><td>No Identity</td><td>Process model</td><td>PID + signals</td><td>AgentRuntime + lifecycle FSM</td></tr>
+      <tr><td>814 Tests</td><td>Integration testing</td><td>make check</td><td>Playwright E2E scenarios</td></tr>
+      <tr><td>Idle Evolution</td><td>Accountability</td><td>SLAs</td><td>Demand-driven + scoring</td></tr>
+      <tr><td>Dead Infra</td><td>Wiring audit</td><td>strace + lsof</td><td>Call-path tracing + .md files</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Conclusion -->
+<div class="conclusion">
+  <h2>The pattern is undeniable</h2>
+  <p>Every framework gives you agents. None manage what happens after. That's not a feature gap &mdash; it's a <strong>missing operating system layer</strong>. And the OS builds itself: every failure is a chisel strike.</p>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+    <a href="https://github.com/opensculpt/opensculpt" class="btn btn-gold" target="_blank">Build With Us</a>
+    <a href="manifesto.html" class="btn btn-outline">Read the Manifesto</a>
+    <a href="index.html" class="btn btn-outline">Back to Home</a>
+  </div>
+</div>
+
+</div>
+
+<footer>
+  <div class="footer-left"><img src="logo.png" alt="OpenSculpt" style="height:18px;opacity:0.5;margin-right:6px"> OpenSculpt</div>
+  <div class="footer-links">
+    <a href="index.html">Home</a>
+    <a href="manifesto.html">Manifesto</a>
+    <a href="https://github.com/opensculpt/opensculpt" target="_blank">GitHub</a>
+  </div>
+</footer>
+
+<script>
+// Open story from URL hash
+if(location.hash){const s=document.querySelector(location.hash);if(s?.classList.contains('story'))s.classList.add('open')}
+</script>
+
+</body>
+</html>

@@ -71,5 +71,5 @@ index.html
 search.html
 0
 
-# Website build (separate repo or generated)
-website/
+# Website Playwright artifacts
+website/.playwright-mcp/
