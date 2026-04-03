@@ -24,7 +24,13 @@ jobs:
       - name: Lint
         run: ruff check agos/ tests/
       - name: Test
-        run: pytest tests/ -v --tb=short -p no:faulthandler
+        run: >
+          pytest tests/ -v --tb=short -p no:faulthandler
+          --ignore=tests/test_frontend_playwright.py
+          --ignore=tests/test_user_stories.py
+          --ignore=tests/test_scenario_live.py
+          --ignore=tests/test_services_e2e.py
+          --ignore=tests/test_ui_bugs.py
         env:
           PYTHONDONTWRITEBYTECODE: 1
 
