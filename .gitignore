@@ -52,8 +52,10 @@ htmlcov/
 # Runtime reports
 reports/
 
-# Screenshots
+# Screenshots (but keep website assets + README logo)
 *.png
+!website/*.png
+!openSulpt_text.png
 
 # Temp files
 temp_*.md
@@ -67,7 +69,7 @@ _logo_b64.txt
 article.html
 base.html
 create.html
-index.html
+/index.html
 search.html
 0
 
