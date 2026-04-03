@@ -59,12 +59,49 @@ async def _boot_os(
     }, source="kernel")
 
 
+def _detect_provider_from_key(api_key: str) -> str | None:
+    """Auto-detect LLM provider from API key prefix."""
+    if not api_key:
+        return None
+    prefixes = {
+        "sk-ant-": "anthropic",
+        "sk-or-": "openrouter",
+        "sk-proj-": "openai",
+        "sk-": "openai",      # generic OpenAI
+        "gsk_": "groq",
+        "xai-": "xai",
+        "pplx-": "perplexity",
+        "r8_": "replicate",
+    }
+    for prefix, provider in prefixes.items():
+        if api_key.startswith(prefix):
+            return provider
+    return None
+
+
 async def main() -> None:
     event_bus = EventBus()
     policy_engine = PolicyEngine()
     tracer = Tracer()
 
     settings.workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── P0: Auto-generate dashboard API key on first boot ──
+    if not settings.dashboard_api_key:
+        import secrets
+        _key_file = settings.workspace_dir / ".dashboard_key"
+        if _key_file.exists():
+            settings.dashboard_api_key = _key_file.read_text(encoding="utf-8").strip()
+        else:
+            _generated_key = f"sculpt-{secrets.token_urlsafe(24)}"
+            _key_file.write_text(_generated_key, encoding="utf-8")
+            settings.dashboard_api_key = _generated_key
+            _logger.warning(
+                "Generated dashboard API key: %s\n"
+                "  Set SCULPT_DASHBOARD_API_KEY env var to override.\n"
+                "  Key saved to %s",
+                _generated_key, _key_file,
+            )
 
     db_path = str(settings.workspace_dir / "opensculpt.db")
     audit_trail = AuditTrail(db_path)
@@ -98,30 +135,49 @@ async def main() -> None:
     )
 
     # Initialize LLM — use setup.json provider (any provider), fall back to Anthropic env var
+    # P0: Wrapped in timeout so bad LLM config doesn't hang boot forever
     llm = None
-    try:
-        from agos.setup_store import load_setup
-        from agos.llm.providers import ALL_PROVIDERS
-        import os as _os
-        for ws in [str(settings.workspace_dir), _os.path.join(_os.getcwd(), ".opensculpt")]:
-            if not _os.path.isdir(ws):
-                continue
-            data = load_setup(ws)
-            providers_cfg = data.get("providers", {})
-            # Try active provider first
-            active = data.get("active_provider", "")
-            if active and active in providers_cfg:
-                cfg = providers_cfg[active]
-                kwargs = {k: v for k, v in cfg.items() if k != "enabled"}
-                cls = ALL_PROVIDERS.get(active)
-                if cls:
-                    try:
-                        llm = cls(**kwargs)
-                        break
-                    except Exception:
-                        pass
-            # Try all enabled providers
-            if llm is None:
+
+    def _init_llm():
+        """Synchronous LLM init — called inside timeout wrapper."""
+        nonlocal llm
+        try:
+            from agos.setup_store import load_setup
+            from agos.llm.providers import ALL_PROVIDERS
+            import os as _os
+            for ws in [str(settings.workspace_dir), _os.path.join(_os.getcwd(), ".opensculpt")]:
+                if not _os.path.isdir(ws):
+                    continue
+                data = load_setup(ws)
+                providers_cfg = data.get("providers", {})
+
+                # P1: Auto-detect provider from key prefix
+                for prov_name, cfg in list(providers_cfg.items()):
+                    key = cfg.get("api_key", "")
+                    detected = _detect_provider_from_key(key)
+                    if detected and detected != prov_name:
+                        _logger.warning("Key prefix suggests '%s' not '%s' — auto-correcting", detected, prov_name)
+                        providers_cfg[detected] = {**cfg, "enabled": True}
+                        del providers_cfg[prov_name]
+                        data["providers"] = providers_cfg
+                        data["active_provider"] = detected
+                        # Persist the fix
+                        from agos.setup_store import save_setup
+                        save_setup(ws, data)
+
+                # Try active provider first
+                active = data.get("active_provider", "")
+                if active and active in providers_cfg:
+                    cfg = providers_cfg[active]
+                    kwargs = {k: v for k, v in cfg.items() if k != "enabled"}
+                    cls = ALL_PROVIDERS.get(active)
+                    if cls:
+                        try:
+                            llm = cls(**kwargs)
+                            return
+                        except Exception:
+                            pass
+                # Try all enabled providers
                 for name, cfg in providers_cfg.items():
                     if not cfg.get("enabled"):
                         continue
@@ -130,20 +186,48 @@ async def main() -> None:
                     if cls:
                         try:
                             llm = cls(**kwargs)
-                            break
+                            return
                         except Exception:
                             continue
-            if llm is not None:
-                break
-    except Exception:
-        pass
-    # Fallback: Anthropic env var
-    if llm is None and settings.anthropic_api_key:
-        from agos.llm.anthropic import AnthropicProvider
-        llm = AnthropicProvider(
-            api_key=settings.anthropic_api_key,
-            model=settings.default_model,
-        )
+                if llm is not None:
+                    return
+        except Exception:
+            pass
+        # Fallback: Anthropic env var
+        if llm is None and settings.anthropic_api_key:
+            from agos.llm.anthropic import AnthropicProvider
+            llm = AnthropicProvider(
+                api_key=settings.anthropic_api_key,
+                model=settings.default_model,
+            )
+
+    try:
+        await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, _init_llm), timeout=30)
+    except asyncio.TimeoutError:
+        _logger.error("LLM initialization timed out after 30s — starting without LLM")
+    except Exception as e:
+        _logger.error("LLM initialization failed: %s — starting without LLM", e)
+
+    if llm:
+        _logger.info("LLM provider initialized: %s", type(llm).__name__)
+        # Validate API key at boot — catch 401 immediately, not after 6 retries
+        if hasattr(llm, 'validate_key'):
+            try:
+                ok, err_msg = await llm.validate_key()
+                if not ok:
+                    _logger.error("LLM API key validation FAILED: %s", err_msg)
+                    await event_bus.emit("os.llm_fatal_error", {
+                        "error": err_msg,
+                        "type": "AuthenticationError",
+                        "phase": "boot",
+                    }, source="kernel")
+                    # Don't nullify llm — let dashboard show the error clearly
+                else:
+                    _logger.info("LLM API key validated OK")
+            except Exception as e:
+                _logger.warning("LLM key validation check failed: %s (continuing anyway)", e)
+    else:
+        _logger.warning("No LLM configured. Run `sculpt setup` or set SCULPT_LLM_API_KEY.")
 
     # Initialize approval gate (human-in-the-loop for dashboard)
     approval_gate = ApprovalGate(
@@ -315,6 +399,9 @@ async def main() -> None:
         _gc.set_agent_registry(agent_registry)
         _gc.set_loom(loom)
         _gc.set_daemon_manager(daemon_manager)
+        _gc.set_audit_trail(audit_trail)
+        _gc.set_demand_collector(demand_collector)
+        _gc.set_os_agent(os_agent)
         _logger.info("GarbageCollector wired — internal + AWS resource reclamation ready")
 
     # Wire resource registry to goal runner (for phase-scoped cleanup before retry)
@@ -326,8 +413,8 @@ async def main() -> None:
     async def _auto_start_gc():
         await asyncio.sleep(30)  # let boot complete
         try:
-            await daemon_manager.start_daemon("gc", config={"dry_run": False})
-            _logger.info("GC daemon auto-started (dry_run=False)")
+            await daemon_manager.start_daemon("gc", config={"dry_run": True})
+            _logger.info("GC daemon auto-started (dry_run=True — set SCULPT_GC_LIVE=1 to enable deletion)")
         except Exception as e:
             _logger.warning("GC auto-start failed: %s", e)
     asyncio.create_task(_auto_start_gc())

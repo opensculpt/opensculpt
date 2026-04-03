@@ -924,6 +924,20 @@ class OSAgent:
             }
 
         except Exception as e:
+            # Fail-fast with clear messages for auth/connection errors
+            from agos.llm.anthropic import AuthenticationError, ConnectionFailedError
+            if isinstance(e, AuthenticationError):
+                msg = "Your LLM API key is invalid. Update it in the Setup tab."
+                await self._bus.emit("os.llm_fatal_error", {
+                    "error": str(e), "type": "AuthenticationError",
+                }, source="os_agent")
+                return _reply(False, "error", msg)
+            if isinstance(e, ConnectionFailedError):
+                msg = "Cannot reach LLM provider. Check your internet connection or provider URL in Settings."
+                await self._bus.emit("os.llm_fatal_error", {
+                    "error": str(e), "type": "ConnectionFailedError",
+                }, source="os_agent")
+                return _reply(False, "error", msg)
             await self._bus.emit("os.error", {
                 "command": command[:200], "error": str(e)[:300],
             }, source="os_agent")
@@ -1681,6 +1695,7 @@ RULES:
                     break
 
                 # Retry LLM calls with exponential backoff (empty response / disconnect)
+                # But fail IMMEDIATELY on auth errors (401) or connection failures
                 resp = None
                 for _retry in range(3):
                     try:
@@ -1692,6 +1707,18 @@ RULES:
                             break
                         _logger.warning("Sub-agent '%s' got empty LLM response (attempt %d/3)", name, _retry + 1)
                     except Exception as llm_err:
+                        # Fail-fast on auth/connection errors — no point retrying
+                        from agos.llm.anthropic import AuthenticationError, ConnectionFailedError
+                        if isinstance(llm_err, (AuthenticationError, ConnectionFailedError)):
+                            _logger.error("Sub-agent '%s' fatal LLM error: %s", name, llm_err)
+                            self._sub_agents[name]["status"] = "done"
+                            self._sub_agents[name]["result"] = f"(fatal: {llm_err})"
+                            await self._bus.emit("os.llm_fatal_error", {
+                                "error": str(llm_err),
+                                "type": type(llm_err).__name__,
+                                "agent": name,
+                            }, source="os_agent")
+                            return
                         _logger.warning("Sub-agent '%s' LLM error (attempt %d/3): %s", name, _retry + 1, llm_err)
                         if _retry < 2:
                             await asyncio.sleep(2 ** _retry)

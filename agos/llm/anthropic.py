@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+
 import anthropic
 
 from agos.llm.base import BaseLLMProvider, LLMMessage, LLMResponse, ToolCall
+
+_logger = logging.getLogger(__name__)
+
+
+class AuthenticationError(Exception):
+    """Raised when the API key is invalid (401). Callers should NOT retry."""
+    pass
+
+
+class ConnectionFailedError(Exception):
+    """Raised when the provider is unreachable. Callers should NOT retry."""
+    pass
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -14,6 +28,23 @@ class AnthropicProvider(BaseLLMProvider):
             kwargs["base_url"] = base_url
         self._client = anthropic.AsyncAnthropic(**kwargs)
         self._model = model
+
+    async def validate_key(self) -> tuple[bool, str]:
+        """Validate the API key with a cheap test call. Returns (ok, error_msg)."""
+        try:
+            await self._client.messages.create(
+                model=self._model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            return True, ""
+        except anthropic.AuthenticationError as e:
+            return False, f"Invalid Anthropic API key: {e}"
+        except anthropic.APIConnectionError as e:
+            return False, f"Cannot reach Anthropic API: {e}"
+        except Exception:
+            # Other errors (rate limit, etc.) mean the key is probably fine
+            return True, ""
 
     async def complete(
         self,
@@ -58,7 +89,14 @@ class AnthropicProvider(BaseLLMProvider):
                 cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
             kwargs["tools"] = cached_tools
 
-        response = await self._client.messages.create(**kwargs)
+        try:
+            response = await self._client.messages.create(**kwargs)
+        except anthropic.AuthenticationError as e:
+            _logger.error("Anthropic API key is invalid (401): %s", e)
+            raise AuthenticationError(f"Invalid Anthropic API key: {e}") from e
+        except anthropic.APIConnectionError as e:
+            _logger.error("Cannot reach Anthropic API (connection failed): %s", e)
+            raise ConnectionFailedError(f"Cannot reach Anthropic API: {e}") from e
 
         # Parse response
         tool_calls = []

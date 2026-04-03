@@ -93,11 +93,20 @@ class _OpenAICompatible(BaseLLMProvider):
 
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
 
+        from agos.llm.anthropic import AuthenticationError, ConnectionFailedError
         import asyncio as _asyncio
         data = None
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             for _attempt in range(5):
-                resp = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                try:
+                    resp = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    _logger.error("LLM provider unreachable: %s", e)
+                    raise ConnectionFailedError(f"Cannot reach LLM provider at {self._base_url}: {e}") from e
+                if resp.status_code == 401:
+                    body = resp.text[:500]
+                    _logger.error("LLM provider returned 401 (bad API key): %s", body)
+                    raise AuthenticationError(f"Invalid API key for {self._base_url}: {body}")
                 if resp.status_code == 429:
                     wait = min(60, 2 ** _attempt)
                     _logger.warning("LLM 429 rate limited, retrying in %ds (attempt %d)", wait, _attempt + 1)

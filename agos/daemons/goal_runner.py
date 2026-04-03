@@ -1365,9 +1365,16 @@ Return JSON only:
         return goals
 
     def _save_goal(self, goal: dict) -> None:
+        """Atomic write: tmp file + rename to prevent corruption from concurrent writes."""
         self._goals_dir.mkdir(parents=True, exist_ok=True)
         path = self._goals_dir / f"{goal['id']}.json"
-        path.write_text(json.dumps(goal, indent=2, default=str), encoding="utf-8")
+        tmp = path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(goal, indent=2, default=str), encoding="utf-8")
+            tmp.replace(path)  # atomic on same filesystem
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def get_goals(self) -> list[dict]:
         """Return all goals with status."""

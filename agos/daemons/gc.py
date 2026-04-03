@@ -112,6 +112,9 @@ class GarbageCollector(Daemon):
         self._agent_registry: Any = None
         self._loom: Any = None
         self._daemon_manager: Any = None
+        self._audit_trail: Any = None
+        self._demand_collector: Any = None
+        self._os_agent: Any = None
         self._dry_run: bool = True  # safe default: log but don't destroy
         self._aws_regions: list[str] = ["us-east-1"]
         self._aws_credentials: dict[str, str] = {}
@@ -133,6 +136,15 @@ class GarbageCollector(Daemon):
 
     def set_daemon_manager(self, dm: Any) -> None:
         self._daemon_manager = dm
+
+    def set_audit_trail(self, at: Any) -> None:
+        self._audit_trail = at
+
+    def set_demand_collector(self, dc: Any) -> None:
+        self._demand_collector = dc
+
+    def set_os_agent(self, oa: Any) -> None:
+        self._os_agent = oa
 
     # ── Daemon lifecycle ───────────────────────────────────────────
 
@@ -238,6 +250,80 @@ class GarbageCollector(Daemon):
         except Exception as e:
             report.errors.append(f"compact_registry: {e}")
 
+        # 7. Trim in-memory audit trail (entries are also in SQLite, safe to trim)
+        try:
+            self._gc_audit_entries(report)
+        except Exception as e:
+            report.errors.append(f"audit_trim: {e}")
+
+        # 8. Compact resolved demand signals
+        try:
+            self._gc_demand_signals(report)
+        except Exception as e:
+            report.errors.append(f"demand_compact: {e}")
+
+        # 9. Trim OS agent caches (response cache, conversation history, sub-agents)
+        try:
+            self._gc_os_agent_memory(report)
+        except Exception as e:
+            report.errors.append(f"os_agent_memory: {e}")
+
+    def _gc_audit_entries(self, report: GCReport) -> None:
+        """Trim in-memory audit entries to last 500. Data is persisted in SQLite."""
+        if not self._audit_trail:
+            return
+        entries = self._audit_trail._entries
+        if len(entries) > 500:
+            trimmed = len(entries) - 500
+            self._audit_trail._entries = entries[-500:]
+            _logger.info("GC: trimmed %d in-memory audit entries (keeping last 500)", trimmed)
+
+    def _gc_demand_signals(self, report: GCReport) -> None:
+        """Remove resolved demand signals older than 1 hour to free memory."""
+        if not self._demand_collector:
+            return
+        now = time.time()
+        to_remove = []
+        for key, sig in self._demand_collector._signals.items():
+            if sig.status == "resolved" and (now - getattr(sig, 'resolved_at', now)) > 3600:
+                to_remove.append(key)
+        for key in to_remove:
+            del self._demand_collector._signals[key]
+        if to_remove:
+            _logger.info("GC: removed %d resolved demand signals", len(to_remove))
+            self._demand_collector._persist()
+
+    def _gc_os_agent_memory(self, report: GCReport) -> None:
+        """Trim OS agent in-memory caches: response cache, completed sub-agents, old goal data."""
+        if not self._os_agent:
+            return
+
+        # Clear completed sub-agents from memory
+        if hasattr(self._os_agent, '_sub_agents'):
+            done = [k for k, v in self._os_agent._sub_agents.items()
+                    if v.get("status") == "done"]
+            for k in done:
+                del self._os_agent._sub_agents[k]
+            if done:
+                _logger.info("GC: cleared %d completed sub-agents from memory", len(done))
+
+        # Trim response cache
+        if hasattr(self._os_agent, '_response_cache'):
+            cache = self._os_agent._response_cache
+            if len(cache) > 50:
+                # Keep only last 50 entries
+                keys = list(cache.keys())
+                for k in keys[:-50]:
+                    del cache[k]
+                _logger.info("GC: trimmed response cache to 50 entries")
+
+        # Trim conversation history
+        if hasattr(self._os_agent, '_conversation_history'):
+            hist = self._os_agent._conversation_history
+            if len(hist) > 20:
+                self._os_agent._conversation_history = hist[-20:]
+                _logger.info("GC: trimmed conversation history to 20 entries")
+
     async def _check_memory_pressure(self, report: GCReport) -> None:
         """Monitor system memory like Windows/Linux OOM killer. Warn and clean."""
         try:
@@ -246,6 +332,11 @@ class GarbageCollector(Daemon):
             if mem.percent > 90:
                 _logger.warning("MEMORY CRITICAL: %d%% used (%dMB free). Emergency cleanup.",
                                 mem.percent, mem.available // (1024 * 1024))
+                # Aggressive in-memory cleanup first (free, instant)
+                self._gc_audit_entries(report)
+                self._gc_demand_signals(report)
+                self._gc_os_agent_memory(report)
+                # Then external cleanup
                 await self._gc_docker_containers(report)
                 await self._gc_orphaned_resources(report)
                 await self.emit("os.memory_critical", {

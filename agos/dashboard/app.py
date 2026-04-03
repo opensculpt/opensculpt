@@ -22,7 +22,7 @@ from agos.a2a.server import router as a2a_router, set_server as set_a2a_server
 
 
 # ── API key authentication middleware ────────────────────────────
-_AUTH_SKIP_PATHS = frozenset({"/", "/health", "/api/status", "/docs", "/openapi.json"})
+_AUTH_SKIP_PATHS = frozenset({"/", "/health", "/api/status", "/docs", "/openapi.json", "/logo.jpg", "/favicon.ico"})
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -126,6 +126,8 @@ def configure(runtime=None, event_bus=None, audit_trail=None,
 class CommandPayload(BaseModel):
     command: str
 
+_MAX_COMMAND_LEN = 10_000  # 10KB max — prevents OOM from giant payloads
+
 
 @dashboard_app.post("/api/os/command")
 async def os_command(payload: CommandPayload) -> dict:
@@ -135,6 +137,10 @@ async def os_command(payload: CommandPayload) -> dict:
     """
     if _os_agent is None:
         return {"ok": False, "action": "error", "message": "OS agent not initialized.", "data": {}}
+    if len(payload.command) > _MAX_COMMAND_LEN:
+        return {"ok": False, "action": "error", "message": f"Command too long ({len(payload.command)} chars, max {_MAX_COMMAND_LEN}).", "data": {}}
+    if not payload.command.strip():
+        return {"ok": False, "action": "error", "message": "Empty command.", "data": {}}
     try:
         return await _os_agent.execute(payload.command)
     except Exception as e:
@@ -185,7 +191,13 @@ async def voice_transcribe(audio: UploadFile = File(...)) -> dict:
 
 @dashboard_app.get("/")
 async def index() -> HTMLResponse:
-    return HTMLResponse(_DASHBOARD_HTML)
+    # Inject API key into page so JS fetch calls can authenticate
+    key = settings.dashboard_api_key or ""
+    html = _DASHBOARD_HTML.replace(
+        "/*__SCULPT_API_KEY__*/",
+        f"const _SCULPT_API_KEY = '{key}';",
+    )
+    return HTMLResponse(html)
 
 
 @dashboard_app.get("/logo.jpg")
@@ -2039,6 +2051,8 @@ async def reload_module(body: dict) -> dict:
         "agos.daemons.base",
         "agos.os_agent",
         "agos.tools.docker_tool",
+        "agos.llm.anthropic",
+        "agos.llm.providers",
         "agos.evolution.demand",
         "agos.evolution.demand_solver",
         "agos.evolution.source_patcher",
@@ -2679,6 +2693,8 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .prompt-chip:hover { border-color: var(--purple); color: var(--text); background: rgba(168,85,247,0.08); }
 
 /* ── Chat Overlay (slides up from command bar) ── */
+.chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; }
+.chat-backdrop.active { display: block; }
 .chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); max-height: 60vh; background: rgba(17,19,26,0.95); border: 1px solid var(--border); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.4); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
 .chat-overlay.active { display: flex; animation: slideUp 0.3s ease; }
 .chat-overlay-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
@@ -2734,7 +2750,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .detail-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; width: 700px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: 0 24px 80px rgba(0,0,0,0.5); }
 .detail-panel::-webkit-scrollbar { width: 4px; }
 .detail-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.detail-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.detail-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg2); z-index: 1; }
 .detail-header h2 { font-size: 15px; font-weight: 700; }
 .detail-body { padding: 20px; }
 
@@ -2942,6 +2958,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 </div>
 
 <!-- ═══ CHAT OVERLAY (slides up from command bar) ═══ -->
+<div class="chat-backdrop" id="chat-backdrop" onclick="closeChatOverlay()"></div>
 <div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()">
     <div class="chat-overlay-header">
         <span>Conversation</span>
@@ -3272,6 +3289,25 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
    OPENSCULPT — LIVING DESKTOP UI
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Auth key (injected at serve time) ── */
+/*__SCULPT_API_KEY__*/
+if (typeof _SCULPT_API_KEY === 'undefined') var _SCULPT_API_KEY = '';
+
+/* ── Auth-aware fetch: auto-inject API key into all requests ── */
+const _origFetch = window.fetch;
+window.fetch = function(url, opts) {
+    opts = opts || {};
+    if (_SCULPT_API_KEY && typeof url === 'string' && url.startsWith('/api')) {
+        opts.headers = opts.headers || {};
+        if (opts.headers instanceof Headers) {
+            opts.headers.set('X-API-Key', _SCULPT_API_KEY);
+        } else {
+            opts.headers['X-API-Key'] = _SCULPT_API_KEY;
+        }
+    }
+    return _origFetch.call(window, url, opts);
+};
+
 /* ── Globals ── */
 const RING_CIRC = 2 * Math.PI * 20; // for goal card rings (r=20)
 const GAUGE_CIRC = 2 * Math.PI * 52;
@@ -3366,7 +3402,9 @@ function statusLabel(s) {
 let _connectionLost = false;
 async function fetchJSON(url) {
     try {
-        const resp = await fetch(url);
+        const _headers = {};
+        if (_SCULPT_API_KEY) _headers['X-API-Key'] = _SCULPT_API_KEY;
+        const resp = await fetch(url, {headers: _headers});
         if (_connectionLost) {
             _connectionLost = false;
             const ind = document.getElementById('conn-lost');
@@ -4617,6 +4655,16 @@ function openDetail(title, bodyHtml) {
 function closeDetail() {
     document.getElementById('detail-modal').classList.remove('active');
 }
+// Close modals on Escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const detail = document.getElementById('detail-modal');
+        if (detail && detail.classList.contains('active')) { closeDetail(); return; }
+        const settings = document.getElementById('settings-modal');
+        if (settings && settings.classList.contains('active')) { closeSettings(); return; }
+        closeChatOverlay();
+    }
+});
 
 async function checkServiceHealth(goalIdx) {
     const btn = document.getElementById('health-btn-' + goalIdx);

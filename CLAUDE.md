@@ -11,6 +11,15 @@ OpenSculpt is an **operating system**, not an application. Think of it like Linu
 - Everything else (evolution engine, security scanner, code analyst, etc.) are sub-agents or system services
 - **"Every failure is a chisel strike."** — when something fails, the OS detects the gap and sculpts a fix. Claude Code, Cursor, Windsurf are the chisels. The OS is the stone. Like Tux represents Linux, Chip (the self-sculpting penguin) represents an OS that shapes itself.
 
+## Core Rule: Solve Demands, Never Suppress Them
+
+When evolution demands accumulate, **fix the root cause** — never add logic to ignore, prune, filter, or auto-resolve them. Demand signals are the OS's immune system. Suppressing them is like disabling a smoke detector.
+
+- Memory pressure → fix the GC or resource cleanup
+- Auth errors (401) → detect bad API key at boot, tell the user immediately
+- ConnectError → fail fast in the LLM provider, don't retry 6 times
+- Stale demands → prove the problem no longer exists, don't delete the signal
+
 ## Architecture (see ARCHITECTURE.md for full Mermaid diagrams)
 
 **CRITICAL: Read ARCHITECTURE.md before making any changes.** It contains:
