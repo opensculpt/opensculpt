@@ -18,7 +18,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('agos/dashboard/static', 'agos/dashboard/static'),
-        ('.opensculpt', '.opensculpt'),
     ] + ([('OpenSculpt_icon.jpg', '.')] if os.path.exists('OpenSculpt_icon.jpg') else []),
     hiddenimports=[
         # Core
