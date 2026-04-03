@@ -427,11 +427,24 @@ async def main() -> None:
         webbrowser.open(url)
     asyncio.create_task(_open_browser())
 
-    # Run uvicorn in the same event loop
+    # Run uvicorn — auto-find free port if default is taken
+    import socket
+    port = settings.dashboard_port
+    for attempt in range(10):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind((settings.dashboard_host, port))
+            sock.close()
+            break  # port is free
+        except OSError:
+            _logger.warning("Port %d in use, trying %d", port, port + 1)
+            port += 1
+    settings.dashboard_port = port
+
     config = uvicorn.Config(
         dashboard_app,
         host=settings.dashboard_host,
-        port=settings.dashboard_port,
+        port=port,
         log_level="warning",
     )
     server = uvicorn.Server(config)
