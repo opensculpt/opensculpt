@@ -42,5 +42,11 @@
     "SCULPT_APPROVAL_MODE": "auto"
   },
 
-  "remoteUser": "vscode"
+  "remoteUser": "vscode",
+
+  "codespaces": {
+    "prebuild": {
+      "devcontainerPath": ".devcontainer/devcontainer.json"
+    }
+  }
 }

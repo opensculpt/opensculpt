@@ -1,77 +1,69 @@
-# Contributing to agos
+# Contributing to OpenSculpt
 
-Thanks for your interest in contributing to agos.
+Thanks for your interest in contributing to OpenSculpt!
 
-## Development Setup
+## Quick Setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/opensculpt/opensculpt.git
 cd opensculpt
-
-# Install in development mode
 pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v
-
-# Lint
-ruff check agos/ tests/
 ```
+
+Or use [GitHub Codespaces](https://codespaces.new/OpenSculpt/opensculpt?quickstart=1) for a zero-install environment.
+
+## Development Workflow
+
+1. **Fork and branch** — create a feature branch from `main`
+2. **Make changes** — edit code in `agos/`
+3. **Lint** — `ruff check agos/ tests/` (must pass, CI enforces this)
+4. **Test** — `pytest tests/ --ignore=tests/test_frontend_playwright.py --ignore=tests/test_user_stories.py -q`
+5. **Submit PR** — fill out the PR template, link any related issues
 
 ## Code Style
 
 - Python 3.11+ required
 - Line length: 100 characters (ruff enforced)
 - Async-first: use `async/await` for I/O operations
-- Type hints on all public functions
+- Type hints on public functions
 - Pydantic models for data structures
-
-## Testing
-
-All changes must pass the existing test suite:
-
-```bash
-pytest tests/ -v --tb=short
-```
-
-New features should include tests. Follow the patterns in `tests/conftest.py` for mocking the LLM provider.
-
-## Pull Request Workflow
-
-1. Branch from `main`
-2. Make your changes
-3. Run `pytest tests/ -v` and `ruff check agos/ tests/`
-4. Submit a PR with a clear description of what changed and why
-
-## Adding Integration Strategies
-
-To add a new evolution integration strategy, follow the pattern in `agos/evolution/strategies/`:
-
-1. Create a new file `agos/evolution/strategies/your_strategy.py`
-2. Subclass `IntegrationStrategy` from `agos/evolution/integrator.py`
-3. Implement: `validate()`, `snapshot()`, `apply()`, `rollback()`, `health_check()`
-4. Register it in `agos/cli/context.py`
-5. Add tests in `tests/evolution/`
 
 ## Project Structure
 
 ```
-agos/
-  cli/          # Typer CLI (natural language routing)
-  kernel/       # Agent runtime (state machine, lifecycle)
-  llm/          # LLM providers (Anthropic Claude)
-  intent/       # Intent engine + proactive intelligence
-  tools/        # Tool registry + builtins
-  knowledge/    # Three-weave knowledge system (The Loom)
-  coordination/ # Multi-agent teamwork
-  triggers/     # File watch, schedule, webhook triggers
-  ambient/      # Always-on background watchers
-  policy/       # Safety policies + audit trail
-  events/       # Event bus + distributed tracing
-  evolution/    # Self-evolving R&D engine
-  dashboard/    # Web monitoring UI
+agos/                  # Main package
+├── kernel/            # Agent runtime, state machine
+├── os_agent.py        # Claude-powered brain
+├── dashboard/         # FastAPI web UI
+├── evolution/         # Self-evolution engine
+├── knowledge/         # Memory system (TheLoom)
+├── daemons/           # Background workers (goal runner, GC, domain)
+├── cli/               # CLI commands
+├── tools/             # Built-in tools
+├── hands/             # Autonomous background tasks
+├── mcp/               # Model Context Protocol integration
+└── a2a/               # Agent-to-Agent protocol
+tests/                 # Test suite
+.opensculpt/           # Runtime workspace (gitignored)
 ```
+
+## Testing
+
+```bash
+# Unit tests (fast, no server needed)
+pytest tests/ --ignore=tests/test_frontend_playwright.py --ignore=tests/test_user_stories.py -q
+
+# Playwright E2E tests (needs server running)
+python -m agos.serve &
+pytest tests/test_frontend_playwright.py -v
+
+# Lint
+ruff check agos/ tests/
+```
+
+## What to Work On
+
+Check [open issues](https://github.com/opensculpt/opensculpt/issues) or the roadmap in `CLAUDE.md` for known bugs and planned features.
 
 ## License
 

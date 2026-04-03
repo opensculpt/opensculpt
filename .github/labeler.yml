@@ -1,0 +1,39 @@
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**"]
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file: ["Dockerfile", "docker-compose*.yml", ".dockerignore"]
+
+dashboard:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/dashboard/**"]
+
+evolution:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/evolution/**"]
+
+kernel:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/kernel/**"]
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ["tests/**"]
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ["*.md", "docs/**"]
+
+cli:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/cli/**"]
+
+agents:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/agents/**", "agos/daemons/**", "agos/hands/**"]
+
+knowledge:
+  - changed-files:
+      - any-glob-to-any-file: ["agos/knowledge/**"]

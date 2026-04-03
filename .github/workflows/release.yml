@@ -19,8 +19,21 @@ jobs:
           name: dist
           path: dist/
 
-  build-exe:
-    runs-on: windows-latest
+  build-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: opensculpt-windows
+            binary: dist/OpenSculpt.exe
+          - os: ubuntu-latest
+            artifact: opensculpt-linux
+            binary: dist/opensculpt
+          - os: macos-latest
+            artifact: opensculpt-macos
+            binary: dist/opensculpt
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,12 +41,12 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -e ".[dev]" pyinstaller
-      - name: Build executable
+      - name: Build binary
         run: pyinstaller opensculpt.spec --noconfirm
       - uses: actions/upload-artifact@v4
         with:
-          name: opensculpt-windows
-          path: dist/OpenSculpt.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
 
   publish-pypi:
     needs: [build-wheel]
@@ -49,7 +62,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: [build-wheel, build-exe, publish-pypi]
+    needs: [build-wheel, build-binaries, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -61,10 +74,22 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: opensculpt-windows
-          path: opensculpt-windows/
+          path: artifacts/
+      - uses: actions/download-artifact@v4
+        with:
+          name: opensculpt-linux
+          path: artifacts/
+      - name: Rename Linux binary
+        run: mv artifacts/opensculpt artifacts/opensculpt-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: opensculpt-macos
+          path: artifacts-mac/
+      - name: Rename macOS binary
+        run: mv artifacts-mac/opensculpt artifacts/opensculpt-macos
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*
-            opensculpt-windows/OpenSculpt.exe
+            artifacts/*
           generate_release_notes: true
