@@ -1,0 +1,43 @@
+{
+  "name": "OpenSculpt Dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests/", "--ignore=tests/test_frontend_playwright.py", "--ignore=tests/test_user_stories.py"],
+        "editor.formatOnSave": true,
+        "[python]": { "editor.defaultFormatter": "charliermarsh.ruff" }
+      }
+    }
+  },
+
+  "postCreateCommand": "pip install -e '.[dev]' 2>/dev/null || pip install -e .",
+
+  "forwardPorts": [8420],
+  "portsAttributes": {
+    "8420": { "label": "OpenSculpt Dashboard", "onAutoForward": "openBrowser" }
+  },
+
+  "containerEnv": {
+    "SCULPT_LLM_PROVIDER": "anthropic"
+  },
+
+  "remoteUser": "vscode"
+}

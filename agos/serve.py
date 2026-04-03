@@ -409,6 +409,15 @@ async def main() -> None:
             event_bus, evolution_state, _sync_memory, _sync_archive,
         ))
 
+    # Auto-open browser after a short delay
+    import webbrowser
+    async def _open_browser():
+        await asyncio.sleep(2)
+        url = f"http://localhost:{settings.dashboard_port}"
+        _logger.info("Opening dashboard at %s", url)
+        webbrowser.open(url)
+    asyncio.create_task(_open_browser())
+
     # Run uvicorn in the same event loop
     config = uvicorn.Config(
         dashboard_app,

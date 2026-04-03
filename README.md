@@ -4,6 +4,9 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/github/actions/workflow/status/opensculpt/opensculpt/ci.yml?label=tests)](https://github.com/opensculpt/opensculpt/actions)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/OpenSculpt/opensculpt?quickstart=1)
+[![Open in VS Code](https://img.shields.io/badge/Open%20in-VS%20Code-007ACC?logo=visual-studio-code&logoColor=white)](vscode://vscode.git/clone?url=https://github.com/OpenSculpt/opensculpt.git)
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/OpenSculpt/opensculpt)
 
 **Every failure is a chisel strike. Every fix reveals a better shape.** 🐧🪨
 

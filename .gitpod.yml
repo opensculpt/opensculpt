@@ -1,0 +1,18 @@
+image:
+  file: Dockerfile
+
+tasks:
+  - name: Setup
+    init: pip install -e '.[dev]' 2>/dev/null || pip install -e .
+    command: python -m agos.serve
+
+ports:
+  - port: 8420
+    onOpen: open-browser
+    visibility: public
+
+vscode:
+  extensions:
+    - ms-python.python
+    - charliermarsh.ruff
+    - tamasfe.even-better-toml
