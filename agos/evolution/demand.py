@@ -102,6 +102,17 @@ class DemandCollector:
         self._missing_capabilities: list[str] = []
         self._user_frustrations: list[dict] = []  # commands that got error responses
 
+    def _persist(self) -> None:
+        """Persist demands to disk so they survive restarts."""
+        try:
+            import json
+            from pathlib import Path
+            from agos.config import settings
+            path = Path(settings.workspace_dir) / "demand_signals.json"
+            path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        except Exception:
+            pass  # Best-effort — don't crash on persistence failure
+
     def subscribe(self, bus) -> None:
         """Wire up to the event bus — listen for all failure signals."""
         bus.subscribe("os.error", self._on_os_error)
@@ -438,6 +449,9 @@ class DemandCollector:
             ranked = sorted(self._signals.items(), key=lambda x: x[1].priority)
             for k, _ in ranked[:len(self._signals) - self._max_signals]:
                 del self._signals[k]
+
+        # Persist to disk so demands survive restarts
+        self._persist()
 
     def _classify_error(self, command: str, error: str) -> tuple[str, str, float]:
         """Classify an OS error into a demand signal type."""

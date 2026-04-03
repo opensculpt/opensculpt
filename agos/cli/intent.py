@@ -22,7 +22,7 @@ def handle_intent(user_input: str) -> None:
     if not settings.anthropic_api_key:
         console.print(
             "[red]No API key set.[/red] Run: "
-            "[bold]export SCULPT_ANTHROPIC_API_KEY=your-key[/bold]"
+            "[bold]export SCULPT_LLM_API_KEY=your-key[/bold]"
         )
         raise SystemExit(1)
 

@@ -197,7 +197,7 @@ class EvolutionAgent:
                         # Try stronger models on same provider
                         strong_models = [
                             "anthropic/claude-sonnet-4",
-                            "anthropic/claude-3.5-haiku",
+                            "anthropic/claude-haiku-4-5",
                             "deepseek/deepseek-chat",
                         ]
                         for strong in strong_models:

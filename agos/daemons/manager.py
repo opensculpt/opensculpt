@@ -116,6 +116,7 @@ class DaemonManager:
 
         # Auto-start GoalRunner if there are existing goals (survive restarts)
         import asyncio
+
         async def _auto_start_goal_runner():
             await asyncio.sleep(5)  # Wait for OS agent to wire up
             goals = self._goal_runner.get_goals()
@@ -125,7 +126,13 @@ class DaemonManager:
                 import logging
                 logging.getLogger(__name__).info(
                     "Auto-started GoalRunner: %d active goals found on disk", len(active))
-        asyncio.ensure_future(_auto_start_goal_runner())
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_auto_start_goal_runner())
+        except RuntimeError:
+            # No event loop yet (sync CLI context) — goal runner starts when server boots
+            pass
 
     async def create_domain_daemon(self, name: str, config: dict) -> Any:
         """Create and start a DomainDaemon dynamically.

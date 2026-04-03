@@ -25,7 +25,7 @@ def init():
         Panel(
             f"[green]OpenSculpt workspace initialized at {workspace}[/green]\n\n"
             "Set your API key:\n"
-            "  [bold]export SCULPT_ANTHROPIC_API_KEY=your-key[/bold]\n\n"
+            "  [bold]export SCULPT_LLM_API_KEY=your-key[/bold]\n\n"
             "Then start using OpenSculpt:\n"
             '  [bold]sculpt "analyze my codebase"[/bold]',
             title="OpenSculpt",

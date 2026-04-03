@@ -211,8 +211,17 @@ async def main() -> None:
             _logger.debug("IntentEngine init failed: %s", e)
     os_agent.set_intent_engine(intent_engine)
 
-    # Initialize demand collector (evolution demand signals from user activity)
+    # Initialize demand collector — restore from disk so demands survive restarts
     demand_collector = DemandCollector()
+    try:
+        import json as _json
+        _signals_path = Path(settings.workspace_dir) / "demand_signals.json"
+        if _signals_path.exists():
+            _saved = _json.loads(_signals_path.read_text(encoding="utf-8"))
+            demand_collector = DemandCollector.from_dict(_saved)
+            _logger.info("Restored %d demand signals from disk", len(demand_collector._signals))
+    except Exception as e:
+        _logger.warning("Could not restore demands: %s", e)
     demand_collector.subscribe(event_bus)
     _logger.info("DemandCollector wired to EventBus — evolution demand signals active")
 

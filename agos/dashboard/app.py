@@ -290,18 +290,29 @@ class FederatedTogglePayload(BaseModel):
 async def get_settings() -> dict:
     has_key = bool(settings.anthropic_api_key)
     has_gh = bool(settings.github_token)
-    # Detect active provider from setup.json
+    api_key_preview = settings.anthropic_api_key[:8] + "..." if has_key else ""
+    # Detect active provider + key from setup.json (wizard saves here)
     active_provider = "anthropic"
     try:
         from agos.setup_store import load_setup
         import pathlib
         data = load_setup(pathlib.Path(settings.workspace_dir))
         active_provider = data.get("active_provider", "anthropic")
+        # If in-memory key is empty, check setup.json providers
+        if not has_key:
+            providers = data.get("providers", {})
+            prov_data = providers.get(active_provider, {})
+            stored_key = prov_data.get("api_key", "")
+            if stored_key:
+                has_key = True
+                api_key_preview = stored_key[:8] + "..."
+                # Also hydrate in-memory settings so the OS agent can use it
+                settings.anthropic_api_key = stored_key
     except Exception:
         pass
     return {
         "has_api_key": has_key,
-        "api_key_preview": settings.anthropic_api_key[:8] + "..." if has_key else "",
+        "api_key_preview": api_key_preview,
         "model": settings.default_model,
         "active_provider": active_provider,
         "has_github_token": has_gh,
@@ -324,32 +335,38 @@ async def set_api_key(payload: ApiKeyPayload) -> dict:
     # Wire LLM provider into OS agent
     if _os_agent is not None:
         try:
-            from agos.llm.anthropic import AnthropicProvider
-            # Local providers don't need a real key
             actual_key = key or "local"
-            if provider_name in ("lmstudio", "ollama"):
-                base_url = base_url or ("http://host.docker.internal:1234/v1" if provider_name == "lmstudio"
-                                        else "http://host.docker.internal:11434/v1")
-            elif provider_name == "anthropic":
-                base_url = ""  # Use default Anthropic endpoint
-            elif not base_url:
-                # Use provider-specific base URLs from the JS metadata
-                _base_urls = {
-                    "openrouter": "https://openrouter.ai/api/v1",
-                    "openai": "https://api.openai.com/v1",
-                    "mistral": "https://api.mistral.ai/v1",
-                    "groq": "https://api.groq.com/openai/v1",
-                    "together": "https://api.together.xyz/v1",
-                    "fireworks": "https://api.fireworks.ai/inference/v1",
-                    "deepseek": "https://api.deepseek.com/v1",
-                    "perplexity": "https://api.perplexity.ai",
-                    "cohere": "https://api.cohere.com/v2",
-                }
-                base_url = _base_urls.get(provider_name, "")
+            # Use the correct provider class based on provider name
+            from agos.llm.providers import (
+                OpenRouterProvider, OpenAIProvider, GroqProvider,
+                TogetherProvider, MistralProvider, FireworksProvider,
+                DeepSeekProvider, PerplexityProvider, CohereProvider,
+                GeminiProvider, OllamaProvider, LMStudioProvider,
+                XAIProvider,
+            )
+            from agos.llm.anthropic import AnthropicProvider
 
-            if base_url:
-                provider = AnthropicProvider(api_key=actual_key, model=model, base_url=base_url)
+            _provider_classes = {
+                "anthropic": lambda: AnthropicProvider(api_key=actual_key, model=model),
+                "openrouter": lambda: OpenRouterProvider(api_key=actual_key, model=model),
+                "openai": lambda: OpenAIProvider(api_key=actual_key, model=model),
+                "groq": lambda: GroqProvider(api_key=actual_key, model=model),
+                "together": lambda: TogetherProvider(api_key=actual_key, model=model),
+                "mistral": lambda: MistralProvider(api_key=actual_key, model=model),
+                "fireworks": lambda: FireworksProvider(api_key=actual_key, model=model),
+                "deepseek": lambda: DeepSeekProvider(api_key=actual_key, model=model),
+                "perplexity": lambda: PerplexityProvider(api_key=actual_key, model=model),
+                "cohere": lambda: CohereProvider(api_key=actual_key, model=model),
+                "gemini": lambda: GeminiProvider(api_key=actual_key, model=model),
+                "xai": lambda: XAIProvider(api_key=actual_key, model=model),
+                "ollama": lambda: OllamaProvider(api_key=actual_key, model=model),
+                "lmstudio": lambda: LMStudioProvider(api_key=actual_key, model=model),
+            }
+            factory = _provider_classes.get(provider_name)
+            if factory:
+                provider = factory()
             else:
+                # Fallback: use Anthropic provider for unknown names
                 provider = AnthropicProvider(api_key=actual_key, model=model)
             provider.name = provider_name
             _os_agent.set_llm(provider)
@@ -907,7 +924,7 @@ async def wizard_detect() -> dict:
         detected.append({
             "name": "anthropic", "label": "Anthropic (OpenSculpt config)", "type": "cloud",
             "key_preview": key[:6] + "..." if len(key) > 6 else "***",
-            "env_var": "SCULPT_ANTHROPIC_API_KEY",
+            "env_var": "SCULPT_LLM_API_KEY",
         })
 
     # Probe local LLM servers
@@ -2782,78 +2799,111 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .compat-hidden .tab-panel.active { display: block; width: 1px; height: 1px; overflow: hidden; opacity: 0.01; }
 
 /* ═══════════════════════════════════════════════════════════════════
-   SETUP WIZARD — first-run overlay
+   SETUP WIZARD — first-run overlay (redesigned)
    ═══════════════════════════════════════════════════════════════════ */
 .wizard-overlay { position: fixed; inset: 0; background: var(--bg); z-index: 10000; display: none; align-items: center; justify-content: center; overflow-y: auto; }
 .wizard-overlay.active { display: flex; }
-.wizard-box { width: min(580px, 92vw); max-height: 90vh; overflow-y: auto; padding: 40px 36px 32px; animation: fadeIn 0.5s ease; }
-.wizard-box::-webkit-scrollbar { width: 4px; }
-.wizard-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.wizard-logo { text-align: center; margin-bottom: 28px; }
-.wizard-logo .logo-icon { font-size: 48px; margin-bottom: 8px; }
-.wizard-logo h1 { font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 800; background: linear-gradient(135deg, var(--accent2), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.wizard-logo p { color: var(--text2); font-size: 13px; margin-top: 4px; }
+.wizard-overlay::before { content: ''; position: fixed; inset: 0; background: radial-gradient(ellipse 600px 400px at 50% 30%, rgba(232,164,74,0.04), transparent 70%), radial-gradient(ellipse 400px 300px at 70% 60%, rgba(155,122,237,0.03), transparent 60%); pointer-events: none; }
+.wizard-box { width: min(520px, 92vw); max-height: 88vh; overflow-y: auto; padding: 0; animation: wizSlideUp 0.5s cubic-bezier(0.16,1,0.3,1); position: relative; }
+.wizard-box::-webkit-scrollbar { width: 3px; }
+.wizard-box::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+@keyframes wizSlideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes wizFadeSwap { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 
-.wizard-steps { display: flex; justify-content: center; gap: 8px; margin-bottom: 32px; }
-.wizard-step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg3); transition: all 0.3s; }
-.wizard-step-dot.active { background: var(--accent); box-shadow: 0 0 8px rgba(232,164,74,0.4); }
-.wizard-step-dot.done { background: var(--green); }
+/* Compact header — shown once, shrinks after step 0 */
+.wizard-header { text-align: center; padding: 32px 0 0; transition: all 0.4s ease; }
+.wizard-header.compact { padding: 16px 0 0; }
+.wizard-header.compact img { width: 36px; height: 36px; }
+.wizard-header.compact h1 { font-size: 18px; margin-top: 4px; }
+.wizard-header.compact p { display: none; }
+.wizard-header img { width: 56px; height: 56px; border-radius: 14px; object-fit: cover; transition: all 0.4s ease; }
+.wizard-header h1 { font-family: 'DM Sans', sans-serif; font-size: 26px; font-weight: 700; margin-top: 10px; background: linear-gradient(135deg, var(--accent2) 0%, var(--purple) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.3px; }
+.wizard-header p { color: var(--text2); font-size: 12px; margin-top: 2px; letter-spacing: 0.3px; }
 
-.wizard-section { display: none; animation: fadeIn 0.3s ease; }
-.wizard-section.active { display: block; }
-.wizard-section h2 { font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 4px; }
-.wizard-section .wiz-subtitle { color: var(--text2); font-size: 12px; margin-bottom: 20px; }
+/* Step indicator with labels */
+.wizard-stepper { display: flex; justify-content: center; align-items: center; gap: 0; padding: 20px 32px 24px; }
+.wiz-step-item { display: flex; align-items: center; gap: 0; }
+.wiz-step-pip { width: 24px; height: 24px; border-radius: 50%; background: var(--bg3); border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--text-dim); transition: all 0.3s ease; flex-shrink: 0; }
+.wiz-step-pip.active { background: rgba(232,164,74,0.15); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 12px rgba(232,164,74,0.2); }
+.wiz-step-pip.done { background: var(--green); border-color: var(--green); color: #fff; }
+.wiz-step-label { font-size: 9px; color: var(--text-dim); margin-left: 6px; letter-spacing: 0.3px; text-transform: uppercase; font-weight: 600; transition: color 0.3s; white-space: nowrap; }
+.wiz-step-item.active .wiz-step-label { color: var(--accent); }
+.wiz-step-item.done .wiz-step-label { color: var(--green); }
+.wiz-step-line { width: 32px; height: 1px; background: var(--border); margin: 0 8px; flex-shrink: 0; transition: background 0.3s; }
+.wiz-step-line.done { background: var(--green); }
+
+/* Content area */
+.wizard-content { padding: 0 36px 28px; }
+.wizard-section { display: none; }
+.wizard-section.active { display: block; animation: wizFadeSwap 0.3s ease; }
+.wizard-section h2 { font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 700; margin-bottom: 3px; color: var(--text); }
+.wizard-section .wiz-subtitle { color: var(--text2); font-size: 11.5px; margin-bottom: 18px; line-height: 1.4; }
 .wizard-scanning { color: var(--accent); font-size: 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
 .wizard-scanning .spin { display: inline-block; animation: pulse 1s infinite; }
 
-.wiz-items { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
-.wiz-items::-webkit-scrollbar { width: 4px; }
-.wiz-items::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.wiz-group-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text2); padding: 8px 4px 4px; }
-.wiz-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: all 0.15s; position: relative; }
+/* Item list */
+.wiz-items { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; max-height: 300px; overflow-y: auto; padding-right: 4px; }
+.wiz-items::-webkit-scrollbar { width: 3px; }
+.wiz-items::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+.wiz-group-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text2); padding: 10px 4px 4px; }
+.wiz-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all 0.15s ease; position: relative; }
 .wiz-item:hover { border-color: var(--border-focus); background: var(--bg3); }
-.wiz-item.selected { border-color: var(--accent); background: rgba(232,164,74,0.06); }
-.wiz-item.detected { border-left: 3px solid var(--green); }
-.wiz-item .wiz-check { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--border); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; transition: all 0.15s; color: transparent; }
+.wiz-item.selected { border-color: var(--accent); background: rgba(232,164,74,0.05); box-shadow: 0 0 0 1px rgba(232,164,74,0.15); }
+.wiz-item.detected { border-left: 2px solid var(--green); }
+.wiz-item .wiz-check { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--border); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; transition: all 0.15s; color: transparent; }
 .wiz-item.selected .wiz-check { background: var(--accent); border-color: var(--accent); color: #fff; }
-.wiz-item .wiz-icon { font-size: 18px; width: 28px; text-align: center; flex-shrink: 0; }
+.wiz-item .wiz-icon { font-size: 16px; width: 24px; text-align: center; flex-shrink: 0; }
 .wiz-item .wiz-info { flex: 1; min-width: 0; }
-.wiz-item .wiz-name { font-size: 13px; font-weight: 600; }
-.wiz-item .wiz-detail { font-size: 11px; color: var(--text2); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wiz-item .wiz-badge { font-size: 9px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
-.wiz-badge.cloud { background: rgba(96,165,250,0.15); color: var(--blue); }
-.wiz-badge.local { background: rgba(74,222,128,0.15); color: var(--green); }
-.wiz-badge.cli { background: rgba(155,122,237,0.15); color: var(--purple); }
-.wiz-badge.ide { background: rgba(232,164,74,0.15); color: var(--accent); }
-.wiz-badge.extension { background: rgba(103,232,249,0.15); color: var(--cyan); }
-.wiz-badge.high { background: rgba(74,222,128,0.15); color: var(--green); }
-.wiz-badge.medium { background: rgba(251,191,36,0.15); color: var(--yellow); }
-.wiz-badge.low { background: rgba(248,113,113,0.12); color: var(--red); }
+.wiz-item .wiz-name { font-size: 12.5px; font-weight: 600; }
+.wiz-item .wiz-detail { font-size: 10.5px; color: var(--text2); margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-item .wiz-badge { font-size: 8px; padding: 2px 7px; border-radius: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.wiz-badge.cloud { background: rgba(96,165,250,0.12); color: var(--blue); }
+.wiz-badge.local { background: rgba(74,222,128,0.12); color: var(--green); }
+.wiz-badge.cli { background: rgba(155,122,237,0.12); color: var(--purple); }
+.wiz-badge.ide { background: rgba(232,164,74,0.12); color: var(--accent); }
+.wiz-badge.extension { background: rgba(103,232,249,0.12); color: var(--cyan); }
+.wiz-badge.high { background: rgba(74,222,128,0.12); color: var(--green); }
+.wiz-badge.medium { background: rgba(251,191,36,0.12); color: var(--yellow); }
+.wiz-badge.low { background: rgba(248,113,113,0.1); color: var(--red); }
+
+/* Collapsible "more providers" toggle */
+.wiz-more-toggle { display: flex; align-items: center; gap: 6px; padding: 6px 4px; cursor: pointer; color: var(--text2); font-size: 10px; font-weight: 600; letter-spacing: 0.3px; transition: color 0.15s; }
+.wiz-more-toggle:hover { color: var(--text); }
+.wiz-more-toggle .arrow { transition: transform 0.2s; font-size: 8px; }
+.wiz-more-toggle.open .arrow { transform: rotate(90deg); }
+.wiz-more-items { display: none; }
+.wiz-more-items.open { display: flex; flex-direction: column; gap: 5px; }
 
 .wiz-empty { text-align: center; padding: 24px; color: var(--text2); font-size: 12px; }
-.wiz-env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+.wiz-env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
 .wiz-env-item { padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; }
-.wiz-env-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 2px; }
+.wiz-env-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text2); margin-bottom: 2px; font-weight: 600; }
 .wiz-env-val { font-size: 13px; font-weight: 600; }
 
-.wiz-input { width: 100%; padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: inherit; outline: none; margin-top: 8px; }
-.wiz-input:focus { border-color: var(--accent); }
+.wiz-input { width: 100%; padding: 9px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; font-family: inherit; outline: none; margin-top: 6px; transition: border-color 0.15s; box-sizing: border-box; }
+.wiz-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(232,164,74,0.1); }
 .wiz-input::placeholder { color: var(--text-dim); }
 
-.wiz-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
-.wiz-btn { padding: 10px 24px; border-radius: 10px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.15s; }
+.wiz-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+.wiz-btn { padding: 9px 22px; border-radius: 8px; font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.15s; }
 .wiz-btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text2); }
 .wiz-btn-secondary:hover { border-color: var(--border-focus); color: var(--text); }
-.wiz-btn-primary { background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; }
-.wiz-btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
-.wiz-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-.wiz-btn-skip { background: none; border: none; color: var(--text2); font-size: 12px; cursor: pointer; padding: 8px 12px; }
+.wiz-btn-primary { background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; letter-spacing: 0.2px; }
+.wiz-btn-primary:hover { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(232,164,74,0.2); }
+.wiz-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+.wiz-btn-skip { background: none; border: none; color: var(--text2); font-size: 11px; cursor: pointer; padding: 8px 12px; }
 .wiz-btn-skip:hover { color: var(--text); }
 
-.wiz-summary { padding: 16px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; }
-.wiz-summary-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 12px; }
+.wiz-summary { padding: 14px 16px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
+.wiz-summary-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 11.5px; }
 .wiz-summary-row .label { color: var(--text2); }
 .wiz-summary-row .value { font-weight: 600; }
+
+/* Launch button special treatment */
+.wiz-btn-launch { background: linear-gradient(135deg, var(--accent), #d97706, var(--purple)); border: none; color: #fff; padding: 12px 32px; font-size: 14px; font-weight: 700; border-radius: 10px; letter-spacing: 0.3px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+.wiz-btn-launch:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(232,164,74,0.3); }
+.wiz-btn-launch::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.1) 50%, transparent 60%); animation: wizShimmer 3s ease-in-out infinite; }
+@keyframes wizShimmer { 0%,100% { transform: translateX(-100%); } 50% { transform: translateX(100%); } }
 </style>
 </head>
 <body>
@@ -2885,7 +2935,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 </div>
 
 <!-- ═══ DESKTOP (the main surface — goal cards live here) ═══ -->
-<div class="desktop" id="desktop">
+<div class="desktop" id="desktop" onclick="closeChatOverlay()">
     <!-- Welcome state (shown when no goals) -->
     <div class="welcome" id="welcome-state">
         <h2>What do you want me to handle?</h2>
@@ -2894,7 +2944,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 </div>
 
 <!-- ═══ CHAT OVERLAY (slides up from command bar) ═══ -->
-<div class="chat-overlay" id="chat-overlay">
+<div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()">
     <div class="chat-overlay-header">
         <span>Conversation</span>
         <div style="display:flex;gap:8px;align-items:center">
@@ -2909,9 +2959,9 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 <div id="status-line" style="position:fixed;bottom:92px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--text2);z-index:50;text-align:center;max-width:600px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></div>
 
 <!-- ═══ COMMAND BAR (Spotlight-style, always visible) ═══ -->
-<div class="command-bar" id="command-bar">
+<div class="command-bar" id="command-bar" onclick="event.stopPropagation()">
     <div class="command-bar-inner">
-        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="if(_chatHistory.length)openChatOverlay();else document.getElementById('os-cmd').focus()" title="Open conversation">
+        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="toggleChatOverlay()" title="Toggle conversation">
         <input type="text" class="cmd-input" id="os-cmd" placeholder="Ask OpenSculpt anything..." autocomplete="off"
                onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" />
         <button class="cmd-send" onclick="runCommand()" title="Send">&#9654;</button>
@@ -3044,18 +3094,8 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     </div>
 </div>
 
-<!-- ═══ HIDDEN COMPAT ELEMENTS (for Playwright tests + old JS) ═══ -->
-<div class="compat-hidden">
-    <!-- Tab buttons for Playwright test compat -->
-    <nav>
-        <button data-tab="overview" onclick="switchTab('overview')">Overview</button>
-        <button data-tab="agents" onclick="switchTab('agents')">Agents</button>
-        <button data-tab="evolution" onclick="switchTab('evolution')">Evolution</button>
-        <button data-tab="events" onclick="switchTab('events')">Events</button>
-        <button data-tab="hands" onclick="switchTab('hands')">Hands</button>
-        <button data-tab="setup" onclick="switchTab('setup')">Setup</button>
-        <button data-tab="system" onclick="switchTab('system')">System</button>
-    </nav>
+<!-- ═══ HIDDEN COMPAT ELEMENTS (data targets for old JS) ═══ -->
+<div class="compat-hidden" aria-hidden="true">
     <div id="os-output"></div>
     <div id="tab-shell" class="tab-panel"></div>
     <div id="tab-overview" class="tab-panel active">Overview</div>
@@ -3150,19 +3190,35 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 <!-- ═══ SETUP WIZARD (first-run overlay, above everything) ═══ -->
 <div class="wizard-overlay" id="wizard-overlay">
 <div class="wizard-box">
-    <div class="wizard-logo">
-        <img src="/logo.jpg" alt="OpenSculpt" style="width:64px;height:64px;border-radius:12px;object-fit:cover;margin-bottom:12px">
+    <div class="wizard-header" id="wizard-header">
+        <img src="/logo.jpg" alt="OpenSculpt">
         <h1>OpenSculpt</h1>
         <p>The Self-Evolving Agentic OS</p>
     </div>
 
-    <div class="wizard-steps" id="wizard-steps">
-        <div class="wizard-step-dot active" data-step="0"></div>
-        <div class="wizard-step-dot" data-step="1"></div>
-        <div class="wizard-step-dot" data-step="2"></div>
-        <div class="wizard-step-dot" data-step="3"></div>
+    <div class="wizard-stepper" id="wizard-stepper">
+        <div class="wiz-step-item active" data-step="0">
+            <div class="wiz-step-pip active">1</div>
+            <span class="wiz-step-label">Scan</span>
+        </div>
+        <div class="wiz-step-line"></div>
+        <div class="wiz-step-item" data-step="1">
+            <div class="wiz-step-pip">2</div>
+            <span class="wiz-step-label">Provider</span>
+        </div>
+        <div class="wiz-step-line"></div>
+        <div class="wiz-step-item" data-step="2">
+            <div class="wiz-step-pip">3</div>
+            <span class="wiz-step-label">Tools</span>
+        </div>
+        <div class="wiz-step-line"></div>
+        <div class="wiz-step-item" data-step="3">
+            <div class="wiz-step-pip">4</div>
+            <span class="wiz-step-label">Launch</span>
+        </div>
     </div>
 
+    <div class="wizard-content">
     <!-- STEP 0: Scanning -->
     <div class="wizard-section active" id="wiz-step-0">
         <h2>Scanning your environment...</h2>
@@ -3174,7 +3230,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     <!-- STEP 1: LLM Provider -->
     <div class="wizard-section" id="wiz-step-1">
         <h2>LLM Provider</h2>
-        <p class="wiz-subtitle">Choose how OpenSculpt talks to AI. Detected providers are highlighted.</p>
+        <p class="wiz-subtitle">Choose how OpenSculpt talks to AI. Detected providers appear first.</p>
         <div class="wiz-items" id="wiz-providers"></div>
         <div id="wiz-api-key-input" style="display:none">
             <input type="password" class="wiz-input" id="wiz-key" placeholder="Paste API key here..." />
@@ -3188,7 +3244,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     <!-- STEP 2: Vibe Coding Tools -->
     <div class="wizard-section" id="wiz-step-2">
         <h2>Vibe Coding Tools</h2>
-        <p class="wiz-subtitle">These tools are the chisels that evolve your OS. We found these on your machine.</p>
+        <p class="wiz-subtitle">The chisels that evolve your OS. We auto-selected what we found.</p>
         <div class="wiz-items" id="wiz-vibe-tools"></div>
         <div class="wiz-btns">
             <button class="wiz-btn wiz-btn-secondary" onclick="wizStep(1)">Back</button>
@@ -3198,14 +3254,15 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 
     <!-- STEP 3: Summary + Launch -->
     <div class="wizard-section" id="wiz-step-3">
-        <h2>Ready to launch</h2>
-        <p class="wiz-subtitle">Here's what we found. You can change any of this in Settings later.</p>
+        <h2>Ready to go</h2>
+        <p class="wiz-subtitle">Here's your setup. Change anything later in Settings.</p>
         <div class="wiz-env-grid" id="wiz-env-grid"></div>
         <div class="wiz-summary" id="wiz-summary"></div>
-        <div class="wiz-btns">
+        <div class="wiz-btns" style="justify-content:center;gap:12px;margin-top:24px">
             <button class="wiz-btn wiz-btn-secondary" onclick="wizStep(2)">Back</button>
-            <button class="wiz-btn wiz-btn-primary" onclick="wizFinish()">Launch OpenSculpt</button>
+            <button class="wiz-btn-launch" onclick="wizFinish()">Launch OpenSculpt</button>
         </div>
+    </div>
     </div>
 </div>
 </div>
@@ -3347,12 +3404,13 @@ function renderDesktop(goals, resources, daemons, learned, services) {
 
     if (!goals.length && !learned.length) {
         desktop.innerHTML = '<div class="welcome" id="welcome-state"><h2>What do you want me to handle?</h2><p>Type a command below. Try "run sales for my startup" or "set up monitoring"</p></div>';
+        // Keep chips visible on welcome screen
+        const chips = document.getElementById('prompt-chips');
+        if (chips) chips.style.display = '';
         return;
     }
 
-    // Hide prompt chips and welcome immediately when goals exist
-    const chips = document.getElementById('prompt-chips');
-    if (chips) chips.style.display = 'none';
+    // Hide welcome but keep chips visible when conversation panel is open
     const welcomeEl = document.getElementById('welcome-state');
     if (welcomeEl) welcomeEl.style.display = 'none';
 
@@ -3965,6 +4023,15 @@ function onCmdFocus() {
     }
 }
 
+function toggleChatOverlay() {
+    const overlay = document.getElementById('chat-overlay');
+    if (overlay.classList.contains('active')) {
+        overlay.classList.remove('active');
+    } else if (_chatHistory.length > 0) {
+        overlay.classList.add('active');
+    }
+}
+
 function openChatOverlay() {
     const overlay = document.getElementById('chat-overlay');
     overlay.classList.add('active');
@@ -3997,9 +4064,7 @@ async function runCommand() {
     if (!cmd) return;
     input.value = '';
 
-    // Hide prompt chips and welcome screen after first command
-    const chips = document.getElementById('prompt-chips');
-    if (chips) chips.style.display = 'none';
+    // Hide welcome screen but keep chips for quick actions
     const welcomeEl = document.getElementById('welcome-state');
     if (welcomeEl) welcomeEl.style.display = 'none';
 
@@ -4071,19 +4136,21 @@ async function runCommand() {
         let rendered = esc(msg)
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>')
-            .replace(/^[-*] (.+)$/gm, '<div style="padding-left:12px">&#8226; $1</div>') // bullet lists
+            .replace(/^#{3,}\s+(.+)$/gm, '<div style="font-size:12px;font-weight:700;color:var(--accent);margin-top:8px;margin-bottom:2px">$1</div>')
+            .replace(/^##\s+(.+)$/gm, '<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:10px;margin-bottom:4px;border-bottom:1px solid var(--border);padding-bottom:3px">$1</div>')
+            .replace(/^#\s+(.+)$/gm, '<div style="font-size:15px;font-weight:700;color:var(--accent2);margin-top:10px;margin-bottom:6px">$1</div>')
+            .replace(/^[-*] (.+)$/gm, '<div style="padding-left:12px">&#8226; $1</div>')
             .split('\n').map(line => {
-                // Render markdown table rows as flex divs
                 if (line.match(/^\|.+\|$/) && !line.match(/^\|[\s-:|]+\|$/)) {
                     const cells = line.split('|').filter(c => c.trim());
                     return '<div style="display:flex;gap:8px;font-size:12px;padding:1px 0">' +
                         cells.map((c, i) => '<span style="' + (i === 0 ? 'font-weight:600;min-width:100px' : 'flex:1;color:var(--text2)') + '">' + c.trim() + '</span>').join('') + '</div>';
                 }
-                if (line.match(/^\|[\s-:|]+\|$/)) return ''; // skip table separators
+                if (line.match(/^\|[\s-:|]+\|$/)) return '';
                 return line;
-            }).join('<br>').replace(/(<br>){3,}/g, '<br><br>'); // collapse excess line breaks
+            }).join('<br>').replace(/(<br>){3,}/g, '<br><br>');
         let meta = '';
-        if (data.data && data.data.turns) meta = '<div style="font-size:10px;color:var(--text2);margin-top:6px">' + data.data.turns + ' turns, ' + (data.data.tokens_used||0).toLocaleString() + ' tokens</div>';
+        if (data.data && data.data.turns) meta = '<div style="font-size:10px;color:var(--text2);margin-top:6px">' + data.data.turns + ' turn' + (data.data.turns !== 1 ? 's' : '') + ', ' + (data.data.tokens_used||0).toLocaleString() + ' tokens</div>';
         thinkBubble.innerHTML = rendered + meta;
         _chatHistory.push({role: 'os', text: msg});
     } catch(e) {
@@ -4789,7 +4856,7 @@ const _providerMeta = {
     anthropic:  { hint: 'console.anthropic.com', placeholder: 'sk-ant-api03-...', local: false, baseUrl: '',
                   models: ['claude-haiku-4-5-20251001','claude-sonnet-4-20250514','claude-opus-4-20250514'] },
     openrouter: { hint: 'openrouter.ai — tracks spend', placeholder: 'sk-or-v1-...', local: false, baseUrl: 'https://openrouter.ai/api/v1',
-                  models: ['anthropic/claude-3.5-haiku','anthropic/claude-sonnet-4','anthropic/claude-opus-4','google/gemini-2.5-flash','google/gemini-2.5-pro','meta-llama/llama-4-maverick','deepseek/deepseek-chat-v3','mistralai/mistral-medium'] },
+                  models: ['anthropic/claude-haiku-4-5','anthropic/claude-sonnet-4','anthropic/claude-opus-4','google/gemini-2.5-flash','google/gemini-2.5-pro','meta-llama/llama-4-maverick','deepseek/deepseek-chat-v3','mistralai/mistral-medium'] },
     openai:     { hint: 'platform.openai.com', placeholder: 'sk-...', local: false, baseUrl: 'https://api.openai.com/v1',
                   models: ['gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-mini','o3','o4-mini'] },
     google:     { hint: 'aistudio.google.com', placeholder: 'AIza...', local: false, baseUrl: '',
@@ -4979,12 +5046,21 @@ async function wizScan() {
 }
 
 function wizStep(n) {
-    // Update dots
-    document.querySelectorAll('.wizard-step-dot').forEach((dot, i) => {
-        dot.classList.remove('active');
-        dot.classList.toggle('done', i < n);
-        if (i === n) dot.classList.add('active');
+    // Update step indicator (labeled stepper)
+    document.querySelectorAll('.wiz-step-item').forEach((item, i) => {
+        const pip = item.querySelector('.wiz-step-pip');
+        item.classList.remove('active', 'done');
+        pip.classList.remove('active', 'done');
+        if (i < n) { item.classList.add('done'); pip.classList.add('done'); pip.innerHTML = '&#x2713;'; }
+        else if (i === n) { item.classList.add('active'); pip.classList.add('active'); pip.textContent = (i+1); }
+        else { pip.textContent = (i+1); }
     });
+    document.querySelectorAll('.wiz-step-line').forEach((line, i) => {
+        line.classList.toggle('done', i < n);
+    });
+    // Compact header after step 0
+    const hdr = document.getElementById('wizard-header');
+    if (n > 0) hdr.classList.add('compact'); else hdr.classList.remove('compact');
     // Show section
     document.querySelectorAll('.wizard-section').forEach(s => s.classList.remove('active'));
     const section = document.getElementById('wiz-step-' + n);
@@ -5030,16 +5106,11 @@ function wizPopulateProviders() {
         return bD - aD;
     });
 
-    let html = '';
-    let addedOtherLabel = false;
+    let htmlDetected = '';
+    let htmlOther = '';
     for (const p of sorted) {
         const isDetected = detected.has(p.name);
         const det = detectedMap[p.name];
-        // Group label: "Other providers" before first non-detected
-        if (!isDetected && !addedOtherLabel && detected.size > 0) {
-            addedOtherLabel = true;
-            html += '<div class="wiz-group-label">Other providers</div>';
-        }
         const icon = _providerIcons[p.name] || '&#x1F4E6;';
         const badge = p.type === 'local' ? '<span class="wiz-badge local">Local</span>' :
                       '<span class="wiz-badge cloud">Cloud</span>';
@@ -5055,15 +5126,23 @@ function wizPopulateProviders() {
         const needsKey = !isDetected && p.type === 'cloud';
         const cls = isDetected ? 'wiz-item detected' : 'wiz-item';
         _wizProviderMap[p.name] = det || p;
-        html += '<div class="' + cls + '" data-pname="' + esc(p.name) + '" data-needs-key="' + needsKey + '" onclick="wizToggleProvider(this)">' +
+        const itemHtml = '<div class="' + cls + '" data-pname="' + esc(p.name) + '" data-needs-key="' + needsKey + '" onclick="wizToggleProvider(this)">' +
             '<div class="wiz-check">&#x2713;</div>' +
             '<div class="wiz-icon">' + icon + '</div>' +
             '<div class="wiz-info"><div class="wiz-name">' + esc(p.label) + '</div>' +
             '<div class="wiz-detail">' + esc(detail) + '</div></div>' +
             badge + detBadge + '</div>';
+        if (isDetected) htmlDetected += itemHtml;
+        else htmlOther += itemHtml;
+    }
+    // Show detected first, then collapsible "more" section
+    let html = htmlDetected;
+    if (htmlOther) {
+        html += '<div class="wiz-more-toggle" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')"><span class="arrow">&#9654;</span> Show ' + (sorted.length - detected.size) + ' more providers</div>';
+        html += '<div class="wiz-more-items">' + htmlOther + '</div>';
     }
     container.innerHTML = html;
-    // Auto-select first detected provider
+    // Auto-select first detected provider (not requiring API key)
     const firstDetected = container.querySelector('.wiz-item.detected');
     const first = firstDetected || container.querySelector('.wiz-item');
     if (first) {
@@ -5071,6 +5150,7 @@ function wizPopulateProviders() {
         _wizProvider = _wizProviderMap[first.dataset.pname] || null;
         _wizNeedsKey = first.dataset.needsKey === 'true';
     }
+    // Only show API key input if the selected provider needs it
     if (_wizNeedsKey) document.getElementById('wiz-api-key-input').style.display = 'block';
 }
 
@@ -5083,15 +5163,26 @@ function wizToggleProvider(el) {
 }
 
 function wizSelectProvider() {
+    // Re-read the currently selected provider from DOM (in case user changed it)
+    const sel = document.querySelector('#wiz-providers .wiz-item.selected');
+    if (sel) {
+        const pname = sel.dataset.pname;
+        _wizProvider = _wizProviderMap[pname] || _wizProvider;
+        _wizNeedsKey = sel.dataset.needsKey === 'true';
+    }
     if (_wizNeedsKey) {
         const key = document.getElementById('wiz-key').value.trim();
         if (!key) { document.getElementById('wiz-key').focus(); return; }
-        // Infer provider from key prefix
-        let name = 'openai';
-        if (key.startsWith('sk-ant')) name = 'anthropic';
-        else if (key.startsWith('gsk_')) name = 'groq';
-        else if (key.startsWith('sk-or-')) name = 'openrouter';
-        _wizProvider = { name, label: name, type: 'cloud', api_key: key };
+        // Attach key to selected provider
+        const selName = sel ? sel.dataset.pname : 'openai';
+        // Also infer from key prefix as fallback
+        let name = selName;
+        if (!sel) {
+            if (key.startsWith('sk-ant')) name = 'anthropic';
+            else if (key.startsWith('gsk_')) name = 'groq';
+            else if (key.startsWith('sk-or-')) name = 'openrouter';
+        }
+        _wizProvider = { name, label: _wizProvider ? _wizProvider.label : name, type: 'cloud', api_key: key };
     }
     wizStep(2);
 }
@@ -5133,12 +5224,12 @@ function wizPopulateVibeTools() {
 
         let detail = '';
         if (isDetected) {
-            detail = t.version ? 'v' + t.version : (t.path ? t.path.split(/[/\\]/).pop() : t.how_to_use);
+            detail = t.version ? 'v' + t.version : (t.path ? t.path.split(/[/\\]/).pop() : 'Installed');
             _wizVibeTools.push(t);
         } else if (isMaybe) {
             detail = 'Config found, binary not';
         } else {
-            detail = t.how_to_use || 'Not installed';
+            detail = 'Not installed';
         }
 
         const cls = isDetected ? 'wiz-item detected selected' : 'wiz-item';

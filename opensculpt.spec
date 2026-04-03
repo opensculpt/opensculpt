@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for OpenSculpt — The Self-Evolving Agentic OS.
 
-Builds a single-folder dist with `OpenSculpt.exe` as the entry point.
+Builds a single-file `OpenSculpt.exe` (one-file mode) for distribution.
 Includes the dashboard HTML template (embedded in app.py) and static assets.
 """
 
@@ -87,8 +87,10 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='OpenSculpt',
     debug=False,
     bootloader_ignore_signals=False,
@@ -97,15 +99,5 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     icon='OpenSculpt_icon.jpg' if os.path.exists('OpenSculpt_icon.jpg') else None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='OpenSculpt',
+    onefile=True,
 )

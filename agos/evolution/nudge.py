@@ -134,6 +134,8 @@ def write_demands_md() -> Path:
                     lines.append(f"- **Error**: `{ctx['error'][:250]}`")
                 if ctx.get("tool"):
                     lines.append(f"- **Tool**: {ctx['tool']}")
+                if ctx.get("fix_hint"):
+                    lines.append(f"- **Fix hint**: {ctx['fix_hint']}")
             lines.append("")
 
     lines.extend([

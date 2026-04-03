@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 
 class AgosSettings(BaseSettings):
     llm_api_key: str = ""  # Provider-agnostic: works with any provider (Anthropic, OpenAI, etc.)
-    default_model: str = "anthropic/claude-3.5-haiku"
+    default_model: str = "anthropic/claude-haiku-4-5"
 
     @property
     def anthropic_api_key(self) -> str:
@@ -38,7 +38,7 @@ class AgosSettings(BaseSettings):
     evolution_llm_provider: str = "auto"
     # Stronger model for Evolution Agent (architectural reasoning needs capability)
     # If set, Evolution Agent uses this model instead of the default evolution LLM.
-    # Recommended: "anthropic/claude-sonnet-4" or "anthropic/claude-3.5-haiku"
+    # Recommended: "anthropic/claude-sonnet-4" or "anthropic/claude-haiku-4-5"
     evolution_agent_model: str = ""
     lmstudio_base_url: str = "http://localhost:1234/v1"
     lmstudio_model: str = ""  # empty = auto-pick best available model

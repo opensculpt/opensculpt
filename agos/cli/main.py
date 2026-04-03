@@ -21,7 +21,7 @@ console = Console()
 
 # Known subcommands — anything else is natural language
 _SUBCOMMANDS = {
-    "ps", "init", "status", "agent", "system", "ask", "recall", "timeline",
+    "start", "ps", "init", "status", "agent", "system", "ask", "recall", "timeline",
     "watch", "schedule", "triggers", "team",
     "audit", "policy", "dashboard", "evolve", "ambient", "proactive",
     "update", "version", "mcp", "talk",
@@ -33,8 +33,16 @@ _SUBCOMMANDS = {
 _app = typer.Typer(
     name="sculpt",
     help="sculpt — OpenSculpt: The Self-Evolving Agentic OS.",
-    no_args_is_help=True,
+    invoke_without_command=True,
 )
+
+@_app.callback(invoke_without_command=True)
+def _default(ctx: typer.Context):
+    """Launch OpenSculpt OS. Run `sculpt --help` for subcommands."""
+    if ctx.invoked_subcommand is None:
+        # No subcommand → boot the OS dashboard
+        dashboard()
+
 
 # Register subcommand groups
 _app.add_typer(agents.app, name="agent", help="Manage agents (ps, kill, pause, resume, logs)")
@@ -43,6 +51,16 @@ _app.add_typer(setup.provider_app, name="provider", help="Manage LLM providers (
 _app.add_typer(setup.channel_app, name="channel", help="Manage notification channels (list, configure, test)")
 _app.add_typer(setup.tool_app, name="tool", help="Manage tools (list, enable, disable)")
 _app.add_typer(setup.setup_app, name="setup", help="Interactive setup wizard")
+
+
+@_app.command("start")
+def start(
+    port: int = typer.Option(8420, "--port", "-p", help="Port to run on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't auto-open browser"),
+):
+    """Start the OpenSculpt OS (alias for dashboard)."""
+    dashboard(port=port, host=host, no_browser=no_browser)
 
 
 @_app.command("ps")
@@ -1210,6 +1228,8 @@ def demands(
                     lines.append(f"- Command: {ctx['command'][:100]}")
                 if ctx.get("error"):
                     lines.append(f"- Error: {ctx['error'][:200]}")
+                if ctx.get("fix_hint"):
+                    lines.append(f"- Fix hint: {ctx['fix_hint']}")
             lines.append("")
 
         lines.extend([
