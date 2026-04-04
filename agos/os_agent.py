@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re as _re
 import time
 from typing import Any
 
@@ -665,7 +666,17 @@ class OSAgent:
                         try:
                             exit_code = int(out.split("\n")[0].split("=")[1])
                             if exit_code != 0:
-                                _real_ok = False
+                                # Exit code 1 for query tools (grep, findstr, find, test, diff)
+                                # means "no match" — not a failure. Only flag exit >= 2 or
+                                # exit 1 for non-query commands.
+                                _cmd = str(tc.arguments.get("command", "")).strip().lower()
+                                _query_tools = ("grep ", "findstr ", "find ", "test ", "diff ",
+                                                "where ", "which ")
+                                if exit_code == 1 and any(_cmd.startswith(q) or f"| {q.strip()}" in _cmd
+                                                          for q in _query_tools):
+                                    pass  # "no match" is informational, not a failure
+                                else:
+                                    _real_ok = False
                         except (IndexError, ValueError):
                             pass
 
@@ -919,7 +930,7 @@ class OSAgent:
 
             return {
                 "ok": True, "action": "execute",
-                "message": final_text,
+                "message": _sanitize_response(final_text),
                 "data": {"turns": turns, "tokens_used": tokens, "steps": steps},
             }
 
@@ -1457,6 +1468,7 @@ class OSAgent:
                 return {
                     "ok": status == "done",
                     "message": agent.get("result", "") or "",
+                    "data": agent.get("data", {}),
                 }
             await asyncio.sleep(3)
 
@@ -1660,6 +1672,17 @@ RULES:
         _total_tokens = 0
         _errors = 0
         _tools_used = set()
+        # Meta-Harness lesson: capture full tool call steps for trace storage.
+        # Unlike the truncated audit entries, these preserve full args + 2000-char output.
+        _sub_steps: list[dict] = []
+
+        def _store_sub_data(turns: int = 0) -> None:
+            """Store execution data (steps, tokens, turns) in sub-agent record."""
+            self._sub_agents[name]["data"] = {
+                "turns": turns,
+                "tokens_used": _total_tokens,
+                "steps": _sub_steps,
+            }
 
         # ── Pluggable condenser for sub-agents (OpenClaw/OpenHands pattern) ──
         from agos.session import get_condenser
@@ -1680,6 +1703,7 @@ RULES:
                                  name, _total_tokens, _TOKEN_BUDGET, turn)
                     self._sub_agents[name]["status"] = "done"
                     self._sub_agents[name]["result"] = f"(token budget reached at turn {turn}, {_total_tokens} tokens used)"
+                    _store_sub_data(turn)
                     break
 
                 # ── OBSERVATION MASKING via pluggable condenser ──
@@ -1692,6 +1716,7 @@ RULES:
                     _logger.info("Sub-agent '%s' stuck in loop: %s", name, _sub_loop_guard.trip_reason)
                     self._sub_agents[name]["status"] = "done"
                     self._sub_agents[name]["result"] = f"(stopped: {_sub_loop_guard.trip_reason})"
+                    _store_sub_data(turn)
                     break
 
                 # Retry LLM calls with exponential backoff (empty response / disconnect)
@@ -1713,6 +1738,7 @@ RULES:
                             _logger.error("Sub-agent '%s' fatal LLM error: %s", name, llm_err)
                             self._sub_agents[name]["status"] = "done"
                             self._sub_agents[name]["result"] = f"(fatal: {llm_err})"
+                            _store_sub_data(turn)
                             await self._bus.emit("os.llm_fatal_error", {
                                 "error": str(llm_err),
                                 "type": type(llm_err).__name__,
@@ -1727,6 +1753,7 @@ RULES:
                 if not resp or (not resp.content and not resp.tool_calls):
                     self._sub_agents[name]["status"] = "done"
                     self._sub_agents[name]["result"] = "(LLM returned empty after 3 retries)"
+                    _store_sub_data(turn)
                     break
                 _total_tokens += resp.input_tokens + resp.output_tokens
                 self._track_usage(resp.input_tokens, resp.output_tokens)
@@ -1734,6 +1761,7 @@ RULES:
                 if not resp.tool_calls:
                     self._sub_agents[name]["status"] = "done"
                     self._sub_agents[name]["result"] = resp.content or "(no output)"
+                    _store_sub_data(turn)
                     break
 
                 asst: list[dict] = []
@@ -1827,6 +1855,15 @@ RULES:
                         "type": "tool_result", "tool_use_id": tc.id,
                         "content": out, "is_error": not res.success,
                     })
+                    # Capture step for execution traces (Meta-Harness pattern)
+                    _sub_steps.append({
+                        "tool": tc.name,
+                        "full_args": tc.arguments,    # full args, not truncated
+                        "ok": _real_ok,
+                        "preview": out[:200],
+                        "full_output": out[:2000],    # 10x audit, capped for disk
+                        "ms": int(res.execution_time_ms),
+                    })
                 messages.append(LLMMessage(role="user", content=results))
 
                 # Record tool calls for LoopGuard (OpenFang SHA256 pattern detection)
@@ -1835,6 +1872,7 @@ RULES:
             else:
                 self._sub_agents[name]["status"] = "done"
                 self._sub_agents[name]["result"] = resp.content or "(max turns reached)"
+                _store_sub_data(25)
 
             _elapsed_ms = int((time.time() - _start_time) * 1000)
             _success = self._sub_agents[name]["status"] == "done"
@@ -1988,6 +2026,7 @@ RULES:
             error_detail = str(e) or f"{type(e).__name__} (no message)"
             self._sub_agents[name]["status"] = "error"
             self._sub_agents[name]["result"] = f"Error: {error_detail}"
+            _store_sub_data(0)  # Preserve steps collected before crash
             _logger.warning("Sub-agent '%s' crashed: %s: %s", name, type(e).__name__, error_detail[:200])
             await self._bus.emit("agent.error", {
                 "agent": name, "error": f"{type(e).__name__}: {error_detail}"[:300],
@@ -2138,6 +2177,33 @@ def _make_manage_agent(registry):
         except Exception as e:
             return f"Error: {e}"
     return _fn
+
+
+# Patterns that should never appear in user-facing responses
+_DANGEROUS_PATTERNS = [
+    (r"(?i)DROP\s+TABLE\s+\w+", "[SQL_REDACTED]"),
+    (r"(?i)DELETE\s+FROM\s+\w+", "[SQL_REDACTED]"),
+    (r"(?i)INSERT\s+INTO\s+\w+", "[SQL_REDACTED]"),
+    (r"(?i)UPDATE\s+\w+\s+SET\s+", "[SQL_REDACTED]"),
+    (r"(?i);\s*--", "[SQL_REDACTED]"),
+    (r"(?i)xp_cmdshell", "[REDACTED]"),
+    (r"rm\s+-rf\s+/(?:\s|$)", "[REDACTED]"),
+    (r"(?i)password\s*[:=]\s*\S+", "password: [REDACTED]"),
+    (r"(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*\S+", r"\1: [REDACTED]"),
+]
+_DANGEROUS_RE = [(compile := _re.compile(p), r) for p, r in _DANGEROUS_PATTERNS]
+
+
+def _sanitize_response(text: str) -> str:
+    """Strip dangerous patterns from user-facing responses.
+
+    The OS agent should never echo SQL injection payloads, credentials,
+    or destructive commands back to the user — even when explaining
+    that they were handled safely.
+    """
+    for pattern, replacement in _DANGEROUS_RE:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _reply(ok: bool, action: str, message: str, data: dict | None = None) -> dict:

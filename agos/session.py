@@ -201,11 +201,18 @@ class SummaryCondenser(BaseCondenser):
         }
         return first + [summary_entry] + recent
 
-    def _extract_summary(self, messages: list[dict]) -> str:
+    def _extract_summary(self, messages: list) -> str:
         parts, tools_used, files_mentioned, errors = [], set(), set(), []
         for msg in messages:
-            cmd = msg.get("command", "")
-            resp = msg.get("response", "")
+            # Handle both dict (conversation history) and LLMMessage (execute loop)
+            if isinstance(msg, dict):
+                cmd = msg.get("command", "")
+                resp = msg.get("response", "")
+            else:
+                role = getattr(msg, "role", "")
+                content = getattr(msg, "content", "")
+                cmd = str(content)[:200] if role == "user" and isinstance(content, str) else ""
+                resp = str(content)[:500] if role == "assistant" and isinstance(content, str) else ""
             if cmd and not cmd.startswith("[session context"):
                 parts.append(f"- {cmd[:80]}")
             for tool in ["shell", "read_file", "write_file", "http", "python", "docker"]:

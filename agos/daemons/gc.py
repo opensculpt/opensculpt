@@ -238,6 +238,12 @@ class GarbageCollector(Daemon):
         except Exception as e:
             report.errors.append(f"temp_files: {e}")
 
+        # 4b. Execution traces (Meta-Harness: keep 7 days, max 50MB)
+        try:
+            await self._gc_traces(report)
+        except Exception as e:
+            report.errors.append(f"trace_prune: {e}")
+
         # 5. Knowledge pruning (expired TTL threads)
         try:
             await self._gc_knowledge(report)
@@ -476,6 +482,33 @@ class GarbageCollector(Daemon):
                     if age_h > 24:
                         f.unlink()
                         report.temp_files_cleaned += 1
+                except Exception:
+                    pass
+
+    async def _gc_traces(self, report: GCReport) -> None:
+        """Prune old execution traces (Meta-Harness pattern: keep recent, prune old)."""
+        traces_dir = Path(".opensculpt/traces")
+        if not traces_dir.exists():
+            return
+        now = time.time()
+        total_size = 0
+        files_by_age: list[tuple[float, int, Path]] = []
+        for f in traces_dir.glob("*.jsonl"):
+            try:
+                stat = f.stat()
+                total_size += stat.st_size
+                age_days = (now - stat.st_mtime) / 86400
+                files_by_age.append((age_days, stat.st_size, f))
+            except Exception:
+                pass
+        # Sort oldest first
+        files_by_age.sort(reverse=True)
+        for age_days, size, f in files_by_age:
+            if age_days > 7 or total_size > 50 * 1024 * 1024:
+                try:
+                    f.unlink()
+                    total_size -= size
+                    report.temp_files_cleaned += 1
                 except Exception:
                     pass
 

@@ -421,6 +421,19 @@ RULES:
             {"name": "web_search", "description": "Search the web for solutions.",
              "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
 
+            # Meta-Harness trace tools: raw execution data > summaries
+            {"name": "read_trace",
+             "description": "Read raw execution trace for a goal or evolution cycle. "
+                            "Shows full tool calls with args and outputs (NOT truncated). "
+                            "Use to understand WHY past attempts failed.",
+             "input_schema": {"type": "object", "properties": {
+                 "id": {"type": "string", "description": "Goal ID or cycle number"},
+                 "last_n": {"type": "integer", "default": 30},
+             }, "required": ["id"]}},
+            {"name": "list_traces",
+             "description": "List available execution traces (goal runs and evolution cycles).",
+             "input_schema": {"type": "object", "properties": {}}},
+
             # Phase 1→2 gate: HYPOTHESIS (required before any writes)
             {"name": "state_hypothesis",
              "description": "REQUIRED before any fix. State your hypothesis: what's the root cause and what should the fix change?",
@@ -497,6 +510,10 @@ RULES:
                 return self._tool_read_environment()
             elif name == "web_search":
                 return await self._tool_web_search(args.get("query", ""))
+            elif name == "read_trace":
+                return self._tool_read_trace(args.get("id", ""), args.get("last_n", 30))
+            elif name == "list_traces":
+                return self._tool_list_traces()
             elif name == "state_hypothesis":
                 return self._tool_state_hypothesis(args)
             elif name == "test_fix":
@@ -603,6 +620,48 @@ RULES:
                 return "\n\n".join(clean) if clean else "No results"
         except Exception as e:
             return f"Search error: {e}"
+
+    # ── Meta-Harness trace tools ──
+
+    def _tool_read_trace(self, trace_id: str, last_n: int = 30) -> str:
+        """Read raw execution trace — full tool calls, not truncated summaries."""
+        if not trace_id:
+            return "Error: id required (e.g. 'goal_1234_5678' or '42')"
+        try:
+            from agos.evolution.trace_store import TraceStore
+            entries = TraceStore().read_trace(trace_id, last_n=last_n)
+            if not entries:
+                return f"No trace found for '{trace_id}'. Use list_traces to see available traces."
+            lines = []
+            for e in entries:
+                status = "OK" if e.get("ok") else "FAIL"
+                kind = e.get("kind", "")
+                tool = e.get("tool", "")
+                if kind == "phase_start":
+                    lines.append(f"\n=== Phase: {e.get('context', '?')} ===")
+                    continue
+                args_str = json.dumps(e.get("args", {}), default=str)[:300]
+                lines.append(f"[{e.get('ts', '')[:19]}] [{status}] {tool}({args_str})")
+                out = e.get("output", "")
+                if out:
+                    lines.append(f"  → {out[:500]}")
+            return "\n".join(lines) if lines else "Trace exists but empty"
+        except Exception as ex:
+            return f"Error reading trace: {ex}"
+
+    def _tool_list_traces(self) -> str:
+        """List available execution traces."""
+        try:
+            from agos.evolution.trace_store import TraceStore
+            traces = TraceStore().list_traces(limit=20)
+            if not traces:
+                return "No traces available yet. Traces are created when goals execute or evolution cycles run."
+            lines = ["Available traces:"]
+            for t in traces:
+                lines.append(f"  {t['id']}  ({t['entries']} entries, {t['size_kb']}KB, {t['age_hours']:.0f}h ago)")
+            return "\n".join(lines)
+        except Exception as ex:
+            return f"Error listing traces: {ex}"
 
     # ── Phase 1→2 GATE: HYPOTHESIS ──
 

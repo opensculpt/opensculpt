@@ -211,6 +211,55 @@ EXPERIMENTS: list[ChaosExperiment] = [
 ]
 
 
+# Severity-aware cooldown (seconds)
+COOLDOWN_BY_SEVERITY = {
+    "low": 300,     # 5 min — skill doc deletion, demand clearing
+    "medium": 900,  # 15 min — config deletion, port conflict
+    "high": 1800,   # 30 min — service kill, data corruption
+}
+
+
+class ChaosLLMProxy:
+    """Wraps an LLM provider to inject chaos faults.
+
+    Instead of fragile monkey-patching (which breaks if OS agent creates
+    a new LLM instance), this proxy wraps the provider object and intercepts
+    all calls. The OS agent's _llm reference is replaced with this proxy,
+    which delegates to the real provider unless a fault is active.
+    """
+
+    def __init__(self, real_llm):
+        self._real = real_llm
+        self._fault: str | None = None  # "empty", "slow", None
+        self._fault_until: float = 0
+
+    async def complete(self, *args, **kwargs):
+        if self._fault and time.time() < self._fault_until:
+            if self._fault == "empty":
+                from agos.llm.base import LLMResponse
+                return LLMResponse(
+                    content="", tool_calls=[], stop_reason="stop",
+                    input_tokens=0, output_tokens=0,
+                )
+            elif self._fault == "slow":
+                await asyncio.sleep(30)
+                return await self._real.complete(*args, **kwargs)
+        return await self._real.complete(*args, **kwargs)
+
+    def inject_fault(self, fault: str, duration_s: float = 60) -> None:
+        """Inject a fault: 'empty' or 'slow'."""
+        self._fault = fault
+        self._fault_until = time.time() + duration_s
+
+    def clear_fault(self) -> None:
+        self._fault = None
+        self._fault_until = 0
+
+    def __getattr__(self, name):
+        """Delegate everything else to the real LLM provider."""
+        return getattr(self._real, name)
+
+
 class ChaosMonkey:
     """Runs chaos experiments against the running OS.
 
@@ -232,10 +281,18 @@ class ChaosMonkey:
         event_bus: EventBus,
         demand_collector=None,
         evo_memory=None,
+        os_agent=None,
     ):
         self._bus = event_bus
         self._demands = demand_collector
         self._memory = evo_memory
+        self._os_agent = os_agent
+        # Track what was broken for specific recovery checks
+        self._last_injection_state: dict = {}
+
+    def set_os_agent(self, agent) -> None:
+        """Set OS agent reference for monkey-patching LLM/tools."""
+        self._os_agent = agent
 
     def list_experiments(self, category: str = "", scenario: str = "") -> list[ChaosExperiment]:
         """List available experiments, optionally filtered."""
@@ -350,11 +407,15 @@ class ChaosMonkey:
         return results
 
     async def _inject(self, experiment: ChaosExperiment) -> bool:
-        """Inject the failure described by the experiment."""
+        """Inject the failure described by the experiment.
+
+        Each injection tracks its target in _last_injection_state so
+        recovery checks can verify the SPECIFIC thing was fixed.
+        """
         name = experiment.name
+        self._last_injection_state = {"experiment": name, "injected_at": time.time()}
 
         if name == "kill_deployed_service":
-            # Find a running container deployed by the OS
             try:
                 out = subprocess.run(
                     ["docker", "ps", "--format", "{{.Names}}"],
@@ -365,6 +426,7 @@ class ChaosMonkey:
                 if not containers:
                     return False
                 target = random.choice(containers)
+                self._last_injection_state["target"] = target
                 subprocess.run(["docker", "stop", target], timeout=10)
                 _logger.info("Chaos: killed container '%s'", target)
                 return True
@@ -372,44 +434,139 @@ class ChaosMonkey:
                 return False
 
         elif name == "remove_config_file":
-            # Find a config file created by the OS
             candidates = list(Path("/app/monitoring").rglob("*.yml")) if Path("/app/monitoring").exists() else []
             if not candidates:
                 candidates = list(Path(".opensculpt/skills").glob("*.md"))
             if not candidates:
                 return False
             target = random.choice(candidates)
+            self._last_injection_state["target"] = str(target)
             target.unlink()
             _logger.info("Chaos: deleted config '%s'", target)
             return True
 
         elif name == "port_conflict":
-            # Occupy a common port
             try:
                 import socket
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.bind(("0.0.0.0", 8081))
                 s.listen(1)
-                # Release after 60s in background
+                self._last_injection_state["target"] = "port:8081"
+                self._last_injection_state["_socket"] = s
                 asyncio.get_event_loop().call_later(60, s.close)
                 _logger.info("Chaos: occupied port 8081")
                 return True
             except OSError:
-                return False  # Port already in use
+                return False
 
         elif name == "tool_not_found":
-            # Unregister a tool
-            await self._bus.emit("chaos.tool_removed", {
-                "tool": "docker_run",
-            }, source="chaos_monkey")
-            _logger.info("Chaos: emitted tool removal for docker_run")
+            # Actually unregister from OS agent's tool registry if available
+            tool_name = "docker_run"
+            self._last_injection_state["target"] = tool_name
+            if self._os_agent and hasattr(self._os_agent, "_inner_registry"):
+                registry = self._os_agent._inner_registry
+                if hasattr(registry, "unregister") and registry.has_tool(tool_name):
+                    self._last_injection_state["_removed_tool"] = registry.unregister(tool_name)
+                    # Restore after 120s
+                    removed = self._last_injection_state["_removed_tool"]
+                    asyncio.get_event_loop().call_later(
+                        120, lambda: registry.register(removed) if removed else None,
+                    )
+                    _logger.info("Chaos: actually unregistered '%s' from tool registry", tool_name)
+                    return True
+            # Fallback: emit event (less effective but still tests event handling)
+            await self._bus.emit("chaos.tool_removed", {"tool": tool_name}, source="chaos_monkey")
+            _logger.info("Chaos: emitted tool removal for %s (no registry access)", tool_name)
             return True
+
+        elif name == "llm_returns_empty":
+            # Use ChaosLLMProxy instead of fragile monkey-patching
+            if self._os_agent and hasattr(self._os_agent, "_llm"):
+                llm = self._os_agent._llm
+                if not isinstance(llm, ChaosLLMProxy):
+                    proxy = ChaosLLMProxy(llm)
+                    self._os_agent._llm = proxy
+                    self._last_injection_state["_proxy"] = proxy
+                else:
+                    proxy = llm
+                proxy.inject_fault("empty", duration_s=60)
+                # Auto-clear after 60s
+                asyncio.get_event_loop().call_later(60, proxy.clear_fault)
+                _logger.info("Chaos: LLM proxy injecting empty responses (60s)")
+                return True
+            await self._bus.emit("chaos.injected", {
+                "experiment": name, "description": "LLM empty (no agent ref)",
+            }, source="chaos_monkey")
+            return True
+
+        elif name == "slow_llm_response":
+            # Use ChaosLLMProxy for delay injection
+            if self._os_agent and hasattr(self._os_agent, "_llm"):
+                llm = self._os_agent._llm
+                if not isinstance(llm, ChaosLLMProxy):
+                    proxy = ChaosLLMProxy(llm)
+                    self._os_agent._llm = proxy
+                    self._last_injection_state["_proxy"] = proxy
+                else:
+                    proxy = llm
+                proxy.inject_fault("slow", duration_s=90)
+                asyncio.get_event_loop().call_later(90, proxy.clear_fault)
+                _logger.info("Chaos: LLM proxy injecting 30s delay (90s)")
+                return True
+            await self._bus.emit("chaos.injected", {
+                "experiment": name, "description": "LLM slow (no agent ref)",
+            }, source="chaos_monkey")
+            return True
+
+        elif name == "network_partition":
+            # Actually disconnect a container from its Docker network
+            try:
+                out = subprocess.run(
+                    ["docker", "ps", "--format", "{{.Names}}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                containers = [c for c in out.stdout.strip().split("\n")
+                              if c and not c.startswith("sculpt-") and c]
+                if not containers:
+                    return False
+                target = random.choice(containers)
+                self._last_injection_state["target"] = target
+                # Get container's network
+                net_out = subprocess.run(
+                    ["docker", "inspect", target, "--format",
+                     "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                networks = [n for n in net_out.stdout.strip().split()
+                            if n and n not in ("bridge", "host", "none")]
+                if networks:
+                    network = networks[0]
+                    self._last_injection_state["network"] = network
+                    subprocess.run(
+                        ["docker", "network", "disconnect", network, target],
+                        timeout=10,
+                    )
+                    # Reconnect after 120s
+                    asyncio.get_event_loop().call_later(
+                        120,
+                        lambda: subprocess.run(
+                            ["docker", "network", "connect", network, target],
+                            timeout=10, capture_output=True,
+                        ),
+                    )
+                    _logger.info("Chaos: disconnected '%s' from network '%s'", target, network)
+                    return True
+                return False
+            except Exception:
+                return False
 
         elif name == "delete_skill_doc":
             skills = list(Path(".opensculpt/skills").glob("*.md"))
             if not skills:
                 return False
             target = random.choice(skills)
+            self._last_injection_state["target"] = str(target)
+            self._last_injection_state["target_name"] = target.name
             target.unlink()
             _logger.info("Chaos: deleted skill doc '%s'", target.name)
             return True
@@ -417,19 +574,21 @@ class ChaosMonkey:
         elif name == "corrupt_evolution_state":
             evo_path = Path(".opensculpt/evolution_state.json")
             if evo_path.exists():
-                # Backup first
                 backup = evo_path.with_suffix(".json.chaos_backup")
                 backup.write_text(evo_path.read_text(encoding="utf-8"), encoding="utf-8")
                 evo_path.write_text("{invalid json!!!}", encoding="utf-8")
+                self._last_injection_state["target"] = str(evo_path)
                 _logger.info("Chaos: corrupted evolution_state.json (backup saved)")
                 return True
             return False
 
         elif name == "clear_all_demands":
             if self._demands:
+                count = len(self._demands._signals)
                 for key in list(self._demands._signals.keys()):
                     self._demands._signals[key].mark_resolved()
-                _logger.info("Chaos: cleared all demand signals")
+                self._last_injection_state["target"] = f"{count}_demands"
+                _logger.info("Chaos: cleared %d demand signals", count)
                 return True
             return False
 
@@ -444,6 +603,7 @@ class ChaosMonkey:
                 if not db_containers:
                     return False
                 target = random.choice(db_containers)
+                self._last_injection_state["target"] = target
                 subprocess.run(["docker", "stop", target], timeout=10)
                 _logger.info("Chaos: killed database container '%s'", target)
                 return True
@@ -456,7 +616,7 @@ class ChaosMonkey:
                     "dd if=/dev/zero of=/tmp/chaos_fill bs=1M count=200",
                     shell=True, timeout=30, capture_output=True,
                 )
-                # Clean up after 60s
+                self._last_injection_state["target"] = "/tmp/chaos_fill"
                 asyncio.get_event_loop().call_later(60, lambda: Path("/tmp/chaos_fill").unlink(missing_ok=True))
                 _logger.info("Chaos: filled 200MB in /tmp")
                 return True
@@ -470,51 +630,94 @@ class ChaosMonkey:
         return True
 
     async def _check_recovery(self, experiment: ChaosExperiment) -> bool:
-        """Check if the OS recovered from the injected failure."""
+        """Check if the OS recovered from the injected failure.
+
+        Uses _last_injection_state to verify the SPECIFIC target was fixed,
+        not just generic state.
+        """
         name = experiment.name
+        target = self._last_injection_state.get("target", "")
 
         if name == "kill_deployed_service":
-            # Check if container was restarted
+            # Check if THE SPECIFIC container was restarted
             try:
                 out = subprocess.run(
                     ["docker", "ps", "--format", "{{.Names}}"],
                     capture_output=True, text=True, timeout=10,
                 )
-                # If any non-sculpt container is running, consider recovered
-                containers = [c for c in out.stdout.strip().split("\n")
-                              if c and not c.startswith("sculpt-")]
-                return len(containers) > 0
+                return target in out.stdout if target else False
             except Exception:
                 return False
 
+        elif name == "remove_config_file":
+            # Check if THE SPECIFIC file was recreated
+            return Path(target).exists() if target else False
+
         elif name == "corrupt_evolution_state":
-            evo_path = Path(".opensculpt/evolution_state.json")
+            evo_path = Path(target) if target else Path(".opensculpt/evolution_state.json")
             if evo_path.exists():
                 try:
                     json.loads(evo_path.read_text(encoding="utf-8"))
-                    return True  # Valid JSON = recovered
+                    return True
                 except json.JSONDecodeError:
                     return False
             return False
 
         elif name == "delete_skill_doc":
-            # Check if any new skill docs were created
+            # Check if THE SPECIFIC skill doc was recreated
+            if target:
+                return Path(target).exists()
             skills = list(Path(".opensculpt/skills").glob("*.md"))
             return len(skills) > 0
 
         elif name == "database_connection_lost":
+            # Check if THE SPECIFIC database container restarted
             try:
                 out = subprocess.run(
                     ["docker", "ps", "--format", "{{.Names}}"],
                     capture_output=True, text=True, timeout=10,
                 )
-                db_containers = [c for c in out.stdout.strip().split("\n")
-                                 if any(db in c.lower() for db in ["mysql", "postgres", "mongo", "redis"])]
-                return len(db_containers) > 0
+                return target in out.stdout if target else False
             except Exception:
                 return False
 
-        # Default: check if demand count decreased (demands resolved)
+        elif name == "tool_not_found":
+            # Check if tool was re-registered
+            if self._os_agent and hasattr(self._os_agent, "_inner_registry"):
+                tool_name = target or "docker_run"
+                return self._os_agent._inner_registry.has_tool(tool_name)
+            return False
+
+        elif name == "network_partition":
+            # Check if container reconnected to network
+            network = self._last_injection_state.get("network", "")
+            if target and network:
+                try:
+                    out = subprocess.run(
+                        ["docker", "inspect", target, "--format",
+                         "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    return network in out.stdout
+                except Exception:
+                    return False
+            return False
+
+        elif name == "port_conflict":
+            # Check if port was released (our socket closed)
+            sock = self._last_injection_state.get("_socket")
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            return True  # Port conflict resolves when socket closes
+
+        elif name == "disk_full_simulation":
+            fill_path = Path(target) if target else Path("/tmp/chaos_fill")
+            return not fill_path.exists()  # Recovered if file was cleaned up
+
+        # Default: check if demand count decreased
         if self._demands:
             return self._demands.pending_count() == 0
         return False

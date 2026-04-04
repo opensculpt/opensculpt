@@ -11,6 +11,10 @@ OpenSculpt is an **operating system**, not an application. Think of it like Linu
 - Everything else (evolution engine, security scanner, code analyst, etc.) are sub-agents or system services
 - **"Every failure is a chisel strike."** — when something fails, the OS detects the gap and sculpts a fix. Claude Code, Cursor, Windsurf are the chisels. The OS is the stone. Like Tux represents Linux, Chip (the self-sculpting penguin) represents an OS that shapes itself.
 
+## Core Rule: Never Hardcode Scenarios in Code
+
+Scenarios, experiments, test cases, and any list of "things to try" must live in `.md` files (like `SCENARIOS.md`, `USER_CHAOS_SCENARIOS.md`), NOT as Python dataclass lists in source code. The code loads and parses the `.md` file at runtime. This way the evolution engine, OS agent, and humans can all read and extend them without touching code.
+
 ## Core Rule: Solve Demands, Never Suppress Them
 
 When evolution demands accumulate, **fix the root cause** — never add logic to ignore, prune, filter, or auto-resolve them. Demand signals are the OS's immune system. Suppressing them is like disabling a smoke detector.

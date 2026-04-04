@@ -208,15 +208,25 @@ KNOWN CONSTRAINTS (learned from past failures — respect these):
 
 Break this into 4-8 concrete phases.
 - Each phase should build ON what the previous phase created — don't build isolated modules.
-- Do NOT create "end_to_end_test" or "system_verification" mega-phases. Each phase verifies itself via its own verify command. The last phase should be simple: just confirm the main output exists (e.g. "curl -sf http://localhost:8080" or "test -f /app/output.html").
+- Do NOT create "end_to_end_test" or "system_verification" mega-phases. Each phase verifies itself via its own verify command. The last phase should be simple: just confirm the main output exists (e.g. curl to localhost or python -c to test a connection).
 - Your LAST phase should verify the ENTIRE system works from the end user's perspective.
+
+CRITICAL SHELL RULES — read the ENVIRONMENT above and follow these:
+- Use ONLY syntax compatible with this environment's shell.
+- For file creation: ALWAYS use python -c "with open('file.py','w') as f: f.write(...)" — NEVER use heredoc (<< EOF), cat >, or echo >>.
+- For multi-line file content: use python -c with triple quotes or write a small Python script that creates the file.
+- NEVER mix shell syntaxes (no Windows batch `for /f` in bash, no bash `$(...)` in cmd.exe).
+- Prefer `python -c "..."` for anything complex — Python works on ALL platforms.
 
 For each phase output:
 - name: short name
 - description: what to accomplish
 - exec: LIST of concrete shell commands to run IN ORDER. These run directly — no LLM interprets them.
-  Example: ["apt-get update -y", "apt-get install -y nginx", "systemctl start nginx"]
-  Example: ["pip install flask sqlalchemy", "python -c 'from app import db; db.create_all()'"]
+  GOOD: ["pip install flask", "python -c 'with open(\"app.py\",\"w\") as f: f.write(\"from flask import Flask\")'"]
+  GOOD: ["python -c 'import subprocess; subprocess.run([\"pip\",\"install\",\"flask\"])'"]
+  BAD: heredoc (cat << EOF) — Unix only, will fail on Windows
+  BAD: for /f batch loops — Windows cmd only, will fail in bash
+  RULE: For file creation or complex logic, ALWAYS use python -c. It works everywhere.
   Write the actual commands. Be specific. Include flags (-y, -q, etc).
 - command: NATURAL LANGUAGE fallback (used ONLY if exec commands fail and the system needs to reason about why). Example: "Install EspoCRM using Docker on port 8081 with MySQL backend."
 - depends_on: list of phase NAMES this depends on (empty [] if independent)
@@ -353,6 +363,23 @@ Return JSON only:
                     })
             self._save_goal(goal)
 
+        # Recover failed phases: retry (< 2 attempts) or replan (>= 2 attempts)
+        failed_phases = [p for p in phases if p.get("status") == "failed"]
+        if failed_phases and not running:
+            for p in failed_phases:
+                retries = p.get("retries", 0)
+                if retries < 2:
+                    p["status"] = "retrying"
+                    p["retries"] = retries + 1
+                    _logger.info("Recovering failed phase '%s' for retry %d", p["name"], retries + 1)
+                elif retries >= 2 and not p.get("_replanned"):
+                    p["_replanned"] = True
+                    _logger.info("Phase '%s' failed %d times — triggering replan", p["name"], retries)
+                    await self._replan_goal(goal, p)
+                    self._save_goal(goal)
+                    return
+            self._save_goal(goal)
+
         # Find phases that are ready to run (dependencies met)
         ready = []
         for i, p in enumerate(phases):
@@ -360,7 +387,7 @@ Return JSON only:
                 continue
             deps = p.get("depends_on", [])
             deps_met = all(
-                any(pp["name"] == dep and pp["status"] in ("done", "done_unverified") for pp in phases)
+                any(pp["name"] == dep and pp["status"] in ("done", "done_unverified", "skipped") for pp in phases)
                 for dep in deps
             ) if deps else True
             if deps_met:
@@ -368,9 +395,10 @@ Return JSON only:
 
         if not ready:
             # Check if all done
-            all_done = all(p.get("status") in ("done", "done_unverified", "failed") for p in phases)
+            _terminal = ("done", "done_unverified", "failed", "skipped")
+            all_done = all(p.get("status") in _terminal for p in phases)
             if all_done:
-                succeeded = all(p.get("status") in ("done", "done_unverified") for p in phases)
+                succeeded = all(p.get("status") in ("done", "done_unverified", "skipped") for p in phases)
                 goal["status"] = "complete" if succeeded else "operating"
                 # Generate completion summary from phase results
                 if succeeded and not goal.get("completion_summary"):
@@ -494,6 +522,15 @@ Return JSON only:
             goal["_total_tokens"] = goal.get("_total_tokens", 0) + _data.get("tokens_used", 0)
 
             current["result"] = (result.get("message", "") or "")[:500]
+
+            # Write execution trace (Meta-Harness pattern: raw traces > summaries)
+            _trace_steps = _data.get("steps", [])
+            if _trace_steps:
+                try:
+                    from agos.evolution.trace_store import TraceStore
+                    TraceStore().write_goal_trace(goal["id"], current["name"], _trace_steps)
+                except Exception:
+                    pass  # trace storage is best-effort
 
             # Verify
             phase_ok = await self._verify_phase(current, phase_ok)
@@ -920,10 +957,16 @@ Return JSON only:
         verify_cmd = phase.get("verify", "")
         result_text = phase.get("result", "")
         _command = phase.get("command", "")
+        exec_cmds = " ".join(phase.get("exec", []))
 
-        # Detect port from verify command (e.g., "curl -sf http://localhost:8080")
+        # Detect port from verify, result, exec commands, or natural language command
+        # Scan all available text — failed phases may only have port in exec/command
         import re
-        port_match = re.search(r'localhost:(\d+)', verify_cmd + " " + result_text)
+        _all_text = f"{verify_cmd} {result_text} {exec_cmds} {_command}"
+        port_match = re.search(r'(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)', _all_text)
+        if not port_match:
+            # Also check for "port NNNN" pattern in natural language
+            port_match = re.search(r'\bport\s+(\d{2,5})\b', _all_text, re.IGNORECASE)
         if not port_match:
             return  # No service detected
 
@@ -1034,6 +1077,9 @@ ENVIRONMENT: {env_summary}
 
 Create 2-4 NEW phases to replace the failed one. Use a COMPLETELY DIFFERENT approach.
 Avoid whatever caused the failure.
+
+SHELL RULES: Use ONLY python -c for file creation (no heredoc, no cat >, no batch for /f).
+Prefer python -c for complex operations — it works on all platforms.
 
 Each phase MUST have these fields:
 - name: short name

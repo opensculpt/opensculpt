@@ -681,6 +681,8 @@ class EvolutionStateData(BaseModel):
     pending_insights: list[dict] = Field(default_factory=list)
     # Paper IDs for which code has already been generated (avoid repeats)
     codegen_done_paper_ids: list[str] = Field(default_factory=list)
+    # Chaos Monkey resilience stats (Netflix pattern — proactive stress testing)
+    chaos_stats: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvolutionState:

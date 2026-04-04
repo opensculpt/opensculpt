@@ -419,6 +419,14 @@ async def main() -> None:
             _logger.warning("GC auto-start failed: %s", e)
     asyncio.create_task(_auto_start_gc())
 
+    # Wire Chaos Monkey daemon (if enabled) with OS agent + demand collector
+    _chaos = getattr(daemon_manager, "_chaos", None)
+    if _chaos:
+        _chaos.set_os_agent(os_agent)
+        _chaos.set_demand_collector(demand_collector)
+        _chaos.set_evo_memory(evolution_state)
+        _logger.info("Chaos Monkey wired — two-layer resilience testing ready")
+
     # Auto-start ServiceKeeper — restore deployed services on boot
     from agos.services import ServiceKeeper
     service_keeper = ServiceKeeper(os_agent=os_agent)

@@ -44,6 +44,8 @@ class Environment:
     apk: bool = False
     brew: bool = False
     choco: bool = False
+    winget: bool = False
+    scoop: bool = False
     snap: bool = False
 
     # Runtimes
@@ -165,8 +167,10 @@ class EnvironmentProbe:
         env.apk = bool(shutil.which("apk"))
         env.brew = bool(shutil.which("brew"))
         env.choco = bool(shutil.which("choco"))
+        env.winget = bool(shutil.which("winget"))
+        env.scoop = bool(shutil.which("scoop"))
         env.snap = bool(shutil.which("snap"))
-        env.can_install_packages = any([env.apt, env.yum, env.dnf, env.apk, env.brew, env.choco])
+        env.can_install_packages = any([env.apt, env.yum, env.dnf, env.apk, env.brew, env.choco, env.winget, env.scoop])
 
         # ── Runtimes ──
         env.python_version = platform.python_version()
@@ -252,13 +256,23 @@ class EnvironmentProbe:
 
         # ── Permissions ──
         env.is_root = os.geteuid() == 0 if hasattr(os, "geteuid") else False
-        # Check writable paths
-        for path in ["/app", "/opt", "/tmp", "/var", os.path.expanduser("~")]:
-            if os.path.isdir(path) and os.access(path, os.W_OK):
+        # Check writable paths (platform-aware)
+        if env.os_name == "Windows":
+            _check_paths = [
+                os.path.expanduser("~"),
+                os.environ.get("TEMP", ""),
+                os.environ.get("LOCALAPPDATA", ""),
+            ]
+        else:
+            _check_paths = ["/app", "/opt", "/tmp", "/var", os.path.expanduser("~")]
+        for path in _check_paths:
+            if path and os.path.isdir(path) and os.access(path, os.W_OK):
                 env.writable_paths.append(path)
         # Read-only root filesystem check
         try:
-            test_file = "/tmp/.opensculpt_write_test"
+            import tempfile
+            _test_dir = tempfile.gettempdir()
+            test_file = os.path.join(_test_dir, ".opensculpt_write_test")
             with open(test_file, "w") as f:
                 f.write("test")
             os.remove(test_file)
@@ -349,6 +363,12 @@ class EnvironmentProbe:
         # OS
         lines.append(f"OS: {env.os_name} {env.os_version} ({env.os_arch})")
 
+        # Windows-specific shell warnings
+        if env.os_name == "Windows":
+            lines.append("SHELL: cmd.exe (NOT bash). DO NOT use: heredoc (<< EOF), cat >, | pipes with bash builtins, $(command), backticks.")
+            lines.append("FILE CREATION: Use python -c \"with open('file.py','w') as f: f.write(...)\" — NOT cat/heredoc/echo >>.")
+            lines.append("PATHS: Use backslashes (C:\\Users\\...) or forward slashes in Python. No /usr, /opt, /tmp — use %TEMP% or user home.")
+
         # Container
         if env.in_container:
             lines.append("CONTAINER: Running inside a container.")
@@ -373,6 +393,12 @@ class EnvironmentProbe:
             install_methods.append("npm install (Node.js packages, Express, etc.)")
         if env.brew:
             install_methods.append("brew install (macOS packages)")
+        if env.winget:
+            install_methods.append("winget install (Windows packages: php, nodejs, mysql, etc.)")
+        if env.scoop:
+            install_methods.append("scoop install (Windows dev tools)")
+        if env.choco:
+            install_methods.append("choco install (Windows packages)")
         if install_methods:
             lines.append("INSTALL SOFTWARE WITH: " + " | ".join(install_methods))
         else:
@@ -408,6 +434,8 @@ class EnvironmentProbe:
             lines.append("SERVICE MANAGER: systemd (use systemctl start/stop)")
         elif env.supervisor:
             lines.append("SERVICE MANAGER: supervisor")
+        elif env.os_name == "Windows":
+            lines.append("SERVICE MANAGER: None — use 'start /B command' or 'pythonw script.py' for background processes")
         else:
             lines.append("SERVICE MANAGER: None — run processes in background with & or nohup")
 

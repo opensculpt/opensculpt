@@ -333,6 +333,27 @@ class DemandSolver:
 
         action_type = action.get("action", "skip")
 
+        # Trace the LLM's diagnosis (Meta-Harness: raw traces > summaries)
+        try:
+            from agos.evolution.trace_store import TraceStore
+            TraceStore().write_evo_trace(self._cycle, {
+                "kind": "diagnose",
+                "tool": action_type,
+                "args": {
+                    "demand": demand.description[:200],
+                    "demand_kind": demand.kind,
+                    "demand_count": demand.count,
+                    "has_reflections": bool(reflections),
+                    "has_research": bool(research),
+                    "has_failure_chain": bool(failure_chain),
+                },
+                "output": json.dumps(action, default=str)[:2000],
+                "ok": action_type != "skip",
+                "context": f"attempt_{demand.attempts}",
+            })
+        except Exception:
+            pass
+
         # ── ACTION: create_tool ──
         if action_type == "create_tool":
             return await self._handle_create_tool(demand, action, env, tool_evolver)
@@ -406,10 +427,30 @@ class DemandSolver:
                     ))
                 _logger.info("DemandSolver: patched %s — %s", file_path, patch.rationale[:60])
                 await self._record_resolution(demand, f"patch_source:{file_path} — {patch.rationale[:80]}", root_cause=f"code_bug_in_{file_path}")
+                try:
+                    from agos.evolution.trace_store import TraceStore
+                    TraceStore().write_evo_trace(self._cycle, {
+                        "tool": "patch_source", "ok": True,
+                        "args": {"file": file_path, "description": action.get("description", "")[:200]},
+                        "output": f"rationale={patch.rationale[:500]}\ndiff_lines={len(patch.diff.splitlines()) if hasattr(patch, 'diff') else '?'}",
+                        "context": demand.description[:200],
+                    })
+                except Exception:
+                    pass
                 return "solved"
             else:
                 if applied:
                     await source_patcher.rollback(patch)
+                try:
+                    from agos.evolution.trace_store import TraceStore
+                    TraceStore().write_evo_trace(self._cycle, {
+                        "tool": "patch_source", "ok": False,
+                        "args": {"file": file_path},
+                        "output": f"applied={applied} health_check=False rollback={'yes' if applied else 'no'}",
+                        "context": demand.description[:200],
+                    })
+                except Exception:
+                    pass
                 return "skip"
         except Exception as e:
             _logger.warning("DemandSolver: patch_source error: %s", e)
@@ -443,6 +484,16 @@ class DemandSolver:
                         what_worked="",
                     ))
                 _logger.info("DemandSolver: tool '%s' failed sandbox: %s", name, issues[:60])
+                try:
+                    from agos.evolution.trace_store import TraceStore
+                    TraceStore().write_evo_trace(self._cycle, {
+                        "tool": "create_tool", "ok": False,
+                        "args": {"name": name, "code_len": len(code)},
+                        "output": f"sandbox_failed: {issues[:500]}",
+                        "context": demand.description[:200],
+                    })
+                except Exception:
+                    pass
                 return "skip"
         except Exception as e:
             _logger.info("DemandSolver: sandbox error for tool '%s': %s", name, e)

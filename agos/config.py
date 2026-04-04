@@ -79,6 +79,9 @@ class AgosSettings(BaseSettings):
     a2a_enabled: bool = True  # Expose OpenSculpt as an A2A server
     a2a_remote_agents: str = ""  # Comma-separated URLs of remote A2A agents to auto-discover
 
+    # Chaos Monkey — proactive resilience testing (Netflix pattern)
+    chaos_enabled: bool = False  # Set SCULPT_CHAOS_ENABLED=true to activate
+
     # Dashboard security
     dashboard_api_key: str = ""  # Set SCULPT_DASHBOARD_API_KEY to require auth
 

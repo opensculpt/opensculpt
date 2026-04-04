@@ -119,6 +119,14 @@ class DaemonManager:
         self._goal_runner = GoalRunner()
         self.register(self._goal_runner)
 
+        # Chaos Monkey — opt-in two-layer resilience testing (Netflix pattern)
+        from agos.config import settings
+        if settings.chaos_enabled:
+            from agos.daemons.chaos_daemon import ChaosMonkeyDaemon
+            self._chaos = ChaosMonkeyDaemon()
+            self._chaos.set_goal_runner(self._goal_runner)
+            self.register(self._chaos)
+
         # Auto-start GoalRunner if there are existing goals (survive restarts)
         import asyncio
 

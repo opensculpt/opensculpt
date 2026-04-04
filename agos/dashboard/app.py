@@ -44,7 +44,12 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-dashboard_app = FastAPI(title="OpenSculpt Dashboard", version="0.1.0")
+try:
+    from importlib.metadata import version as _pkg_version
+    _VERSION = _pkg_version("opensculpt")
+except Exception:
+    _VERSION = "0.1.5"
+dashboard_app = FastAPI(title="OpenSculpt Dashboard", version=_VERSION)
 dashboard_app.add_middleware(ApiKeyAuthMiddleware)
 dashboard_app.include_router(a2a_router)
 
@@ -192,10 +197,19 @@ async def voice_transcribe(audio: UploadFile = File(...)) -> dict:
 @dashboard_app.get("/")
 async def index() -> HTMLResponse:
     # Inject API key into page so JS fetch calls can authenticate
-    key = settings.dashboard_api_key or ""
+    # Read from key file (source of truth) since settings may not reflect runtime mutations
+    key = ""
+    try:
+        _kf = settings.workspace_dir / ".dashboard_key"
+        if _kf.exists():
+            key = _kf.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    if not key:
+        key = settings.dashboard_api_key or ""
     html = _DASHBOARD_HTML.replace(
         "/*__SCULPT_API_KEY__*/",
-        f"const _SCULPT_API_KEY = '{key}';",
+        f"var _SCULPT_API_KEY = '{key}';",
     )
     return HTMLResponse(html)
 
@@ -253,7 +267,7 @@ async def system_status() -> dict:
     agents = _runtime.list_agents() if _runtime else []
     return {
         "status": "ok",
-        "version": "0.1.0",
+        "version": _VERSION,
         "node_role": settings.node_role,
         "agents_total": len(agents),
         "agents_running": sum(1 for a in agents if a["state"] == "running"),
@@ -766,6 +780,27 @@ async def evolution_demands() -> dict:
     return _demand_collector.summary()
 
 
+@dashboard_app.post("/api/evolution/demands/resolve")
+async def resolve_demands(body: dict) -> dict:
+    """Resolve demand signals by key prefix or resolve all stale (escalated, age > threshold)."""
+    if _demand_collector is None:
+        return {"ok": False, "error": "demand collector not initialized"}
+    import time
+    prefix = body.get("prefix", "")
+    max_age_hours = body.get("max_age_hours", 0)
+    count = 0
+    if prefix:
+        count = _demand_collector.clear_resolved(prefix)
+    elif max_age_hours > 0:
+        threshold = time.time() - (max_age_hours * 3600)
+        for sig in list(_demand_collector._signals.values()):
+            if sig.status == "escalated" and sig.first_seen < threshold:
+                sig.mark_resolved()
+                count += 1
+    _demand_collector._persist()
+    return {"ok": True, "resolved": count}
+
+
 _source_patcher = None  # Set by serve.py
 
 # User action needed — evolution blockers that the OS can't solve alone.
@@ -790,6 +825,174 @@ async def dismiss_blocker(index: int) -> dict:
         removed = _user_action_needed.pop(index)
         return {"dismissed": True, "blocker": removed}
     return {"dismissed": False, "reason": "invalid index"}
+
+
+# ── Chaos Monkey API ───────────────────────────────────────────
+
+
+@dashboard_app.get("/api/chaos/experiments")
+async def chaos_experiments() -> dict:
+    """List available chaos experiments."""
+    from agos.evolution.chaos import EXPERIMENTS
+    return {
+        "experiments": [
+            {
+                "name": e.name,
+                "category": e.category,
+                "description": e.description,
+                "severity": e.severity,
+                "steady_state": e.steady_state,
+                "requires": e.requires,
+            }
+            for e in EXPERIMENTS
+        ],
+        "count": len(EXPERIMENTS),
+    }
+
+
+@dashboard_app.post("/api/chaos/run")
+async def chaos_run(payload: dict) -> dict:
+    """Run a chaos experiment. Body: {"name": "kill_deployed_service"} or {} for random."""
+    from agos.evolution.chaos import ChaosMonkey
+    evo_mem = _evolution_state.restore_evolution_memory() if _evolution_state else None
+    monkey = ChaosMonkey(
+        event_bus=_event_bus,
+        demand_collector=_demand_collector,
+        evo_memory=evo_mem,
+    )
+    name = payload.get("name", "")
+    if name:
+        result = await monkey.run_experiment(name)
+    else:
+        result = await monkey.run_random()
+    return {
+        "experiment": result.experiment,
+        "injected": result.injected,
+        "detected": result.detected,
+        "recovered": result.recovered,
+        "evolution_triggered": result.evolution_triggered,
+        "time_to_detect_s": result.time_to_detect_s,
+        "time_to_recover_s": result.time_to_recover_s,
+        "details": result.details,
+    }
+
+
+@dashboard_app.post("/api/chaos/run-user")
+async def chaos_run_user(payload: dict) -> dict:
+    """Run a user chaos experiment. Body: {"name": "vague_fix_it"} or {} for random."""
+    from agos.evolution.user_chaos import UserChaosMonkey
+    monkey = UserChaosMonkey("http://localhost:8420")
+    name = payload.get("name", "")
+    if name:
+        result = await monkey.run_experiment(name)
+    else:
+        result = await monkey.run_random()
+    # Inject demand for failures (same as daemon does)
+    if not result.passed and _demand_collector:
+        _demand_collector._add_signal(
+            key=f"chaos:user:{result.experiment}",
+            kind="chaos_unrecovered",
+            source="chaos_monkey",
+            description=(
+                f"User chaos '{result.experiment}' failed: {', '.join(result.violations)}. "
+                f"Command: '{result.command}'. {result.details[:200]}"
+            ),
+            priority=0.9,
+        )
+    # Write trace (so resilience score updates)
+    try:
+        from agos.evolution.trace_store import TraceStore
+        TraceStore().write_evo_trace(0, {
+            "kind": "chaos_experiment",
+            "tool": result.experiment,
+            "ok": result.passed,
+            "args": {
+                "command": result.command,
+                "category": result.category,
+                "violations": result.violations,
+            },
+            "output": f"layer=user ok={result.passed}",
+            "context": f"chaos:user:{result.experiment}",
+            "source": "chaos_monkey",
+        })
+    except Exception:
+        pass
+    return {
+        "experiment": result.experiment,
+        "command": result.command,
+        "category": result.category,
+        "passed": result.passed,
+        "violations": result.violations,
+        "goal_status": result.goal_status,
+        "duration_s": result.duration_s,
+        "details": result.details,
+    }
+
+
+@dashboard_app.get("/api/chaos/results")
+async def chaos_results() -> dict:
+    """Get recent chaos experiment results from traces."""
+    try:
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        traces = store.list_traces(limit=50)
+        chaos_traces = [t for t in traces if "chaos" in t.get("id", "")]
+        results = []
+        for t in chaos_traces[:10]:
+            entries = store.read_trace(t["id"], last_n=20)
+            for e in entries:
+                if e.get("kind") == "chaos_experiment":
+                    results.append(e)
+        return {"results": results, "count": len(results)}
+    except Exception:
+        return {"results": [], "count": 0}
+
+
+@dashboard_app.get("/api/chaos/resilience")
+async def chaos_resilience() -> dict:
+    """Unified resilience score across infra + user chaos layers."""
+    try:
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        traces = store.list_traces(limit=100)
+
+        infra = {"run": 0, "detected": 0, "recovered": 0}
+        user = {"run": 0, "passed": 0, "violations": {}}
+
+        for t in traces:
+            entries = store.read_trace(t["id"], last_n=50)
+            for e in entries:
+                if e.get("kind") != "chaos_experiment":
+                    continue
+                ctx = e.get("context", "")
+                args = e.get("args", {})
+                if "user" in ctx:
+                    # User chaos (check first — more specific)
+                    user["run"] += 1
+                    if e.get("ok"):
+                        user["passed"] += 1
+                    for v in args.get("violations", []):
+                        user["violations"][v] = user["violations"].get(v, 0) + 1
+                else:
+                    # Infrastructure chaos (default for any chaos_experiment)
+                    infra["run"] += 1
+                    if args.get("detected"):
+                        infra["detected"] += 1
+                    if e.get("ok"):
+                        infra["recovered"] += 1
+
+        # Compute resilience score: infra recovery * 0.4 + user pass rate * 0.6
+        infra_rate = infra["recovered"] / max(infra["run"], 1)
+        user_rate = user["passed"] / max(user["run"], 1)
+        score = infra_rate * 0.4 + user_rate * 0.6
+
+        return {
+            "resilience_score": round(score, 3),
+            "by_layer": {"infrastructure": infra, "user": user},
+            "total_experiments": infra["run"] + user["run"],
+        }
+    except Exception:
+        return {"resilience_score": 0, "by_layer": {}, "total_experiments": 0}
 
 
 @dashboard_app.get("/api/patches")
@@ -880,6 +1083,37 @@ async def cancel_goal(goal_id: str) -> dict:
                 if p.get("status") in ("pending", "retrying", "running"):
                     p["status"] = "cancelled"
             return {"ok": True, "goal_id": goal_id}
+    return {"ok": False, "error": "Goal not found"}
+
+
+@dashboard_app.post("/api/goals/{goal_id}/skip-phase")
+async def skip_phase(goal_id: str, body: dict = {}) -> dict:
+    """Skip a failed phase and advance to the next one. Emits a demand signal
+    so evolution learns why users skip phases (the OS failed to do its job)."""
+    if _daemon_manager is None:
+        return {"ok": False, "error": "No daemon manager"}
+    goal_runner = _daemon_manager.get_goal_runner()
+    if not goal_runner:
+        return {"ok": False, "error": "No goal runner"}
+    goals = goal_runner.get_goals()
+    for g in goals:
+        if g.get("id") != goal_id:
+            continue
+        for p in g.get("phases", []):
+            if p.get("status") == "failed":
+                reason = body.get("reason", "User skipped — phase was stuck")
+                p["status"] = "skipped"
+                p["result"] = (p.get("result", "") or "") + f"\n[Skipped by user: {reason}]"
+                # Emit demand signal so evolution learns from skipped phases
+                if _event_bus:
+                    await _event_bus.emit("os.phase_skipped", {
+                        "goal_id": goal_id,
+                        "phase": p["name"],
+                        "reason": reason,
+                        "original_error": (p.get("result", "") or "")[:200],
+                    }, source="dashboard")
+                return {"ok": True, "phase": p["name"], "new_status": "skipped"}
+        return {"ok": False, "error": "No failed phase to skip"}
     return {"ok": False, "error": "Goal not found"}
 
 
@@ -2062,6 +2296,7 @@ async def reload_module(body: dict) -> dict:
         "agos.guard",
         "agos.session",
         "agos.processes.resources",
+        "agos.environment",
         "agos.dashboard.app",
     ]
 
@@ -2078,10 +2313,41 @@ async def reload_module(body: dict) -> dict:
     for mod_name in modules_to_reload:
         if mod_name in sys.modules:
             try:
+                # Dashboard reload destroys wired globals — save & restore them
+                _saved_state = {}
+                if mod_name == "agos.dashboard.app":
+                    _dash = sys.modules[mod_name]
+                    _state_keys = [
+                        "_runtime", "_event_bus", "_audit_trail", "_policy_engine",
+                        "_tracer", "_loom", "_evolution_state", "_meta_evolver",
+                        "_process_manager", "_workload_discovery", "_agent_registry",
+                        "_os_agent", "_mcp_manager", "_approval_gate", "_daemon_manager",
+                        "_task_planner", "_demand_collector", "_resource_registry",
+                        "_service_keeper", "_start_time",
+                    ]
+                    for k in _state_keys:
+                        if hasattr(_dash, k):
+                            _saved_state[k] = getattr(_dash, k)
+
                 importlib.reload(sys.modules[mod_name])
+
+                # Restore wired state after dashboard reload
+                if _saved_state:
+                    _dash = sys.modules[mod_name]
+                    for k, v in _saved_state.items():
+                        setattr(_dash, k, v)
+
                 reloaded.append(mod_name)
             except Exception as e:
                 errors.append(f"{mod_name}: {e}")
+
+    # Clear environment probe cache after reload so new env logic takes effect
+    if "agos.environment" in reloaded:
+        try:
+            import agos.environment as _env_mod
+            _env_mod._cached = None
+        except Exception:
+            pass
 
     return {"ok": len(errors) == 0, "reloaded": reloaded, "errors": errors}
 
@@ -3105,6 +3371,20 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
                 </div>
                 <div id="fed-reciprocity" style="font-size:10px;padding:6px 8px;margin-top:6px;background:var(--bg);border-radius:6px;border:1px solid var(--border)"></div>
             </details>
+
+            <!-- Dashboard API Key (for external/API access) -->
+            <details style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+                <summary style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:1px;font-weight:600;cursor:pointer;margin-bottom:6px">Dashboard API Key</summary>
+                <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Auto-generated on first boot. Use this key for external API access (curl, scripts).</div>
+                <div style="display:flex;gap:6px;align-items:center">
+                    <input id="dash-key-display" type="password" readonly style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--green);font-family:'JetBrains Mono',monospace;font-size:11px;outline:none;cursor:text" />
+                    <button onclick="document.getElementById('dash-key-display').type=document.getElementById('dash-key-display').type==='password'?'text':'password'" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:0 10px;color:var(--text2);cursor:pointer;font-size:13px;height:36px">&#128065;</button>
+                    <button onclick="navigator.clipboard.writeText(document.getElementById('dash-key-display').value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:0 12px;color:var(--text);cursor:pointer;font-size:11px;font-weight:600;height:36px">Copy</button>
+                </div>
+                <div style="font-size:10px;color:var(--text2);margin-top:6px">
+                    Usage: <code style="background:var(--bg);padding:1px 4px;border-radius:3px">curl -H "X-API-Key: YOUR_KEY" http://localhost:8420/api/os/command</code>
+                </div>
+            </details>
         </div>
     </div>
 </div>
@@ -3291,7 +3571,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 
 /* ── Auth key (injected at serve time) ── */
 /*__SCULPT_API_KEY__*/
-if (typeof _SCULPT_API_KEY === 'undefined') var _SCULPT_API_KEY = '';
+if (typeof _SCULPT_API_KEY === 'undefined') { var _SCULPT_API_KEY = ''; }
 
 /* ── Auth-aware fetch: auto-inject API key into all requests ── */
 const _origFetch = window.fetch;
@@ -3610,7 +3890,7 @@ function renderDesktop(goals, resources, daemons, learned, services) {
             html += '<div style="font-size:11px;color:var(--text2);margin-bottom:6px">' + esc(errorMsg || 'A phase is stuck. Expand to see details.') + '</div>';
             html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
             html += '<span class="prompt-chip" onclick="quickCmd(\'retry ' + esc((g.description||'').slice(0,30)) + '\')">Retry</span>';
-            html += '<span class="prompt-chip" onclick="quickCmd(\'skip the failed phase and continue\')">Skip phase</span>';
+            html += '<span class="prompt-chip" onclick="fetch(\'/api/goals/' + esc(g.id) + '/skip-phase\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\',\'X-API-Key\':_SCULPT_API_KEY},body:JSON.stringify({reason:\'User skipped from dashboard\'})}).then(r=>r.json()).then(d=>{if(d.ok)refreshDesktop();else showToast(d.error,\'error\')})">Skip phase</span>';
             html += '</div></div>';
         }
 
@@ -4069,13 +4349,13 @@ function toggleChatOverlay() {
 }
 
 function openChatOverlay() {
-    const overlay = document.getElementById('chat-overlay');
-    overlay.classList.add('active');
+    document.getElementById('chat-overlay').classList.add('active');
+    document.getElementById('chat-backdrop').classList.add('active');
 }
 
 function closeChatOverlay() {
-    const overlay = document.getElementById('chat-overlay');
-    overlay.classList.remove('active');
+    document.getElementById('chat-overlay').classList.remove('active');
+    document.getElementById('chat-backdrop').classList.remove('active');
 }
 function clearChat() {
     _chatHistory = [];
@@ -4893,6 +5173,9 @@ function openSettings() {
             ghStatus.innerHTML = '<span style="color:var(--green)">&#10003; Configured:</span> <code style="color:var(--cyan)">' + esc(s.github_token_preview) + '</code>';
         }
         // Sharing model: git PRs (auto-share removed)
+        // Dashboard API key (for external access)
+        const dashKeyEl = document.getElementById('dash-key-display');
+        if (dashKeyEl && _SCULPT_API_KEY) dashKeyEl.value = _SCULPT_API_KEY;
     });
 }
 function closeSettings() { document.getElementById('settings-modal').classList.remove('active'); }

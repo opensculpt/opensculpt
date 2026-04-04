@@ -351,3 +351,113 @@ class TestLifecycleIntegration:
         assert len(high_conf) >= 1
         principles = [i.principle for i in high_conf if i.principle]
         assert "Auto-restore principle" in principles
+
+
+# ── TEST 6: TraceStore (Meta-Harness pattern) ──────────────────
+
+
+class TestTraceStore:
+    """Meta-Harness lesson: raw execution traces > summaries (56.7% vs 38.7%)."""
+
+    def setup_method(self):
+        self._original_dir = os.getcwd()
+        self._tmpdir = tempfile.mkdtemp()
+        os.chdir(self._tmpdir)
+
+    def teardown_method(self):
+        os.chdir(self._original_dir)
+
+    def test_write_and_read_goal_trace(self):
+        """Goal phase traces include full tool calls."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        steps = [
+            {"tool": "shell", "full_args": {"command": "apt-get install nginx"},
+             "ok": True, "full_output": "Done.", "ms": 5000},
+            {"tool": "shell", "full_args": {"command": "curl localhost:80"},
+             "ok": False, "full_output": "Connection refused", "ms": 100},
+        ]
+        store.write_goal_trace("goal_test_123", "Setup", steps)
+        entries = store.read_trace("goal_test_123")
+        assert len(entries) == 3  # 1 phase_start + 2 steps
+        assert entries[0]["kind"] == "phase_start"
+        assert entries[1]["tool"] == "shell"
+        assert entries[1]["ok"] is True
+        assert entries[2]["ok"] is False
+        assert "Connection refused" in entries[2]["output"]
+
+    def test_full_args_not_truncated(self):
+        """Unlike audit (200 chars), traces keep full args."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        long_command = "x" * 500
+        steps = [{"tool": "shell", "full_args": {"command": long_command},
+                  "ok": True, "full_output": "ok", "ms": 10}]
+        store.write_goal_trace("goal_full_args", "Test", steps)
+        entries = store.read_trace("goal_full_args")
+        assert len(entries[1]["args"]["command"]) == 500
+
+    def test_output_capped_at_2000(self):
+        """Output is capped at 2000 chars (10x audit, not unlimited)."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        store.write_evo_trace(99, {
+            "tool": "test", "output": "x" * 5000,
+            "ok": True, "args": {},
+        })
+        entries = store.read_trace("99")
+        assert len(entries[0]["output"]) <= 2000
+
+    def test_evo_trace_write_and_read(self):
+        """Evolution cycle actions are traced."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        store.write_evo_trace(42, {
+            "tool": "create_tool", "ok": False,
+            "args": {"name": "docker_run"},
+            "output": "sandbox_failed: import subprocess not allowed",
+        })
+        entries = store.read_trace("42")
+        assert len(entries) == 1
+        assert entries[0]["tool"] == "create_tool"
+        assert entries[0]["ok"] is False
+
+    def test_list_traces(self):
+        """list_traces shows all available trace files."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        store.write_goal_trace("goal_a", "P1", [{"tool": "x", "ok": True}])
+        store.write_evo_trace(1, {"tool": "y", "ok": True, "args": {}})
+        traces = store.list_traces()
+        assert len(traces) == 2
+        ids = {t["id"] for t in traces}
+        assert "goal_a" in ids
+
+    def test_no_double_prefix(self):
+        """goal_id starting with 'goal_' doesn't get double-prefixed."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        store.write_goal_trace("goal_123_456", "P1", [{"tool": "x", "ok": True}])
+        traces = store.list_traces()
+        assert any(t["id"] == "goal_123_456" for t in traces)
+        # Should NOT have "goal_goal_123_456"
+        assert not any("goal_goal_" in t["id"] for t in traces)
+
+    def test_fuzzy_read(self):
+        """read_trace can find traces by partial ID match."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        store.write_goal_trace("goal_abc_def", "P1", [{"tool": "t", "ok": True}])
+        entries = store.read_trace("abc_def")
+        assert len(entries) >= 1
+
+    def test_fallback_to_preview(self):
+        """Steps without full_args/full_output fall back to args/preview."""
+        from agos.evolution.trace_store import TraceStore
+        store = TraceStore()
+        steps = [{"tool": "shell", "args": {"cmd": "ls"}, "ok": True,
+                  "preview": "file1 file2", "ms": 5}]
+        store.write_goal_trace("goal_fallback", "Test", steps)
+        entries = store.read_trace("goal_fallback")
+        assert entries[1]["args"] == {"cmd": "ls"}
+        assert entries[1]["output"] == "file1 file2"
