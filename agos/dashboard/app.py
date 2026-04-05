@@ -5417,6 +5417,7 @@ function onProviderChange() {
         document.getElementById('base-url-input').value = meta.baseUrl || '';
     } else {
         baseRow.style.display = 'none';
+        document.getElementById('base-url-input').value = '';  // Clear stale localhost from local providers
     }
     // Model suggestions
     const dl = document.getElementById('model-suggestions');
