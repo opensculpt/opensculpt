@@ -207,9 +207,10 @@ async def index() -> HTMLResponse:
         pass
     if not key:
         key = settings.dashboard_api_key or ""
+    import json as _json
     html = _DASHBOARD_HTML.replace(
         "/*__SCULPT_API_KEY__*/",
-        f"var _SCULPT_API_KEY = '{key}';",
+        f"var _SCULPT_API_KEY = {_json.dumps(key)};",
     )
     return HTMLResponse(html)
 
@@ -357,6 +358,30 @@ async def set_api_key(payload: ApiKeyPayload) -> dict:
         return {"ok": False, "error": "API key cannot be empty"}
 
     _base_url = payload.base_url.strip() if payload.base_url else ""
+
+    # Validate base_url to prevent SSRF against internal services
+    if _base_url:
+        from urllib.parse import urlparse as _urlparse
+        import ipaddress as _ipaddress
+        import socket as _socket
+        _parsed = _urlparse(_base_url)
+        if _parsed.scheme not in ("http", "https"):
+            return {"ok": False, "error": "base_url must use http or https"}
+        _host = _parsed.hostname or ""
+        # Block obviously internal targets
+        _blocked = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "metadata.google.internal"}
+        if _host in _blocked:
+            return {"ok": False, "error": "base_url cannot point to localhost or internal services"}
+        # Block private/link-local IP ranges
+        try:
+            _addr = _ipaddress.ip_address(_host)
+            if _addr.is_private or _addr.is_loopback or _addr.is_link_local or _addr.is_reserved:
+                return {"ok": False, "error": "base_url cannot point to private or internal IP addresses"}
+        except ValueError:
+            pass  # hostname, not IP — OK
+        # Block cloud metadata endpoints
+        if _host == "169.254.169.254":
+            return {"ok": False, "error": "base_url cannot point to cloud metadata service"}
 
     # Wire LLM provider into OS agent
     if _os_agent is not None:
@@ -1326,6 +1351,39 @@ async def wizard_save(body: dict) -> dict:
 
     mark_wizard_complete(ws)
     return {"ok": True}
+
+
+@dashboard_app.post("/api/wizard/probe")
+async def wizard_probe() -> dict:
+    """Run LLM capability probe and return results."""
+    from agos.llm.probe import LLMProbe
+    from agos.setup_store import set_llm_capability
+    ws = pathlib.Path(settings.workspace_dir)
+
+    # Get the OS agent's LLM provider
+    os_agent = _get_os_agent()
+    if not os_agent or not os_agent._llm:
+        return {"error": "No LLM configured. Set a provider first.", "tier": "dead"}
+
+    model_id = getattr(os_agent._llm, "_model", "")
+    cap = await LLMProbe.probe(os_agent._llm, model_id=model_id)
+
+    # Persist and wire into OS agent
+    set_llm_capability(ws, cap.to_dict())
+    os_agent.set_llm_capability(cap)
+
+    return cap.to_dict()
+
+
+@dashboard_app.get("/api/llm/capability")
+async def llm_capability() -> dict:
+    """Get current LLM capability (cached from last probe)."""
+    from agos.setup_store import get_llm_capability
+    ws = pathlib.Path(settings.workspace_dir)
+    cap = get_llm_capability(ws)
+    if not cap:
+        return {"tier": "probing", "message": "LLM not probed yet"}
+    return cap
 
 
 @dashboard_app.post("/api/wizard/demo")
@@ -2844,7 +2902,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     /* Borders */
     --border: rgba(255,255,255,0.06); --border-focus: rgba(255,255,255,0.14);
     /* Text */
-    --text: #e2e6ef; --text2: #6a7486; --text-dim: #3d4555;
+    --text: #e2e6ef; --text2: #8b95a7; --text-dim: #3d4555;
     /* Accents — warm amber + soft violet */
     --blue: #60a5fa; --blue2: #93c5fd; --green: #4ade80; --green2: #86efac;
     --yellow: #fbbf24; --red: #f87171; --purple: #9b7aed; --cyan: #67e8f9;
@@ -2884,7 +2942,8 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .topbar-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 
 /* ── Desktop (the main area) ── */
-.desktop { position: absolute; top: 32px; left: 0; right: 0; bottom: 100px; overflow-y: auto; overflow-x: hidden; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; align-content: start; z-index: 1; }
+.desktop { position: absolute; top: 32px; left: 0; right: 0; bottom: 100px; overflow-y: auto; overflow-x: hidden; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; align-content: start; z-index: 1; max-width: 1440px; margin: 0 auto; }
+.desktop.has-status { top: 76px; }
 .desktop.has-nudge { top: 68px; }
 .desktop::-webkit-scrollbar { width: 4px; }
 .desktop::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
@@ -2898,7 +2957,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .goal-card:nth-child(5) { animation: cardEnter 0.4s ease 0.32s both; }
 .goal-card:nth-child(n+6) { animation: cardEnter 0.4s ease 0.4s both; }
 .goal-card:hover { border-color: rgba(155,122,237,0.4); transform: translateY(-3px); box-shadow: 0 12px 40px rgba(0,0,0,0.35); }
-.goal-card.active-goal { grid-column: span 2; border-color: rgba(155,122,237,0.4); box-shadow: 0 0 20px rgba(155,122,237,0.1); border-left: 3px solid var(--purple); }
+.goal-card.active-goal { grid-column: span 2; border-color: rgba(155,122,237,0.4); box-shadow: 0 0 20px rgba(155,122,237,0.1); }
 .goal-card.complete { border-color: rgba(74,222,128,0.2); opacity: 0.7; }
 .goal-card.complete:hover { opacity: 1; }
 .goal-card.failed { border-color: rgba(248,113,113,0.4); box-shadow: 0 0 12px rgba(248,113,113,0.08); }
@@ -3184,12 +3243,57 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .wiz-btn-launch:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(232,164,74,0.3); }
 .wiz-btn-launch::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.1) 50%, transparent 60%); animation: wizShimmer 3s ease-in-out infinite; }
 @keyframes wizShimmer { 0%,100% { transform: translateX(-100%); } 50% { transform: translateX(100%); } }
+
+/* ── Status Strip (44px, below topbar) ── */
+.status-strip { position: fixed; top: 40px; left: 0; right: 0; height: 44px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 12px; z-index: 99; backdrop-filter: blur(12px); cursor: pointer; }
+.status-strip.active { display: flex; }
+.status-strip-text { font-size: 13px; font-weight: 600; color: var(--text); }
+.status-strip-phase { font-size: 12px; color: var(--cyan); }
+.status-strip-bar { width: 120px; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+.status-strip-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--purple), var(--cyan)); transition: width 0.8s ease; }
+.status-strip-idle { font-size: 13px; font-weight: 600; color: var(--green); }
+
+/* ── Completion Celebration ── */
+@keyframes celebrateGlow { 0% { box-shadow: 0 0 20px rgba(74,222,128,0.4); border-color: rgba(74,222,128,0.6); } 100% { box-shadow: 0 0 0px transparent; border-color: rgba(74,222,128,0.2); } }
+.goal-card.just-completed { animation: celebrateGlow 2s ease-out; opacity: 1 !important; }
+
+/* ── Command Bar Sending State ── */
+.cmd-input.sending { pointer-events: none; opacity: 0.5; }
+.cmd-send.sending { pointer-events: none; }
+.cmd-send.sending::after { content: ''; display: block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.cmd-send.sending > span { display: none; }
+
+/* ── Chat Empty State ── */
+.chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; text-align: center; color: var(--text2); gap: 12px; }
+.chat-empty h3 { font-size: 14px; font-weight: 600; color: var(--text); }
+.chat-empty p { font-size: 12px; max-width: 280px; line-height: 1.5; }
+
+/* ── Thinking Indicator ── */
+@keyframes thinkDot { 0%,80%,100% { opacity: 0.3; } 40% { opacity: 1; } }
+.think-dots { display: flex; gap: 4px; align-items: center; padding: 10px 14px; }
+.think-dots span { width: 6px; height: 6px; background: var(--cyan); border-radius: 50%; }
+.think-dots span:nth-child(1) { animation: thinkDot 1.2s infinite 0s; }
+.think-dots span:nth-child(2) { animation: thinkDot 1.2s infinite 0.2s; }
+.think-dots span:nth-child(3) { animation: thinkDot 1.2s infinite 0.4s; }
+
+/* ── Focus Visible (a11y) ── */
+:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+
+/* ── Touch Targets (a11y) ── */
+.cmd-send, .cmd-mic { min-width: 44px; min-height: 44px; }
+
+/* ── Reduced Motion (a11y) ── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
 </style>
 </head>
 <body>
 
 <!-- ═══ TOP BAR (macOS-style menu bar) ═══ -->
-<header>
+<header role="banner">
 <div class="topbar">
     <div class="topbar-left">
         <img src="/logo.jpg" alt="OpenSculpt" style="height:22px;width:22px;border-radius:4px;object-fit:cover;vertical-align:middle;margin-right:6px">
@@ -3214,8 +3318,15 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
     <button class="evo-nudge-copy" onclick="copyEvolutionPrompt()">Copy prompt</button>
 </div>
 
+<!-- ═══ STATUS STRIP (active goal progress) ═══ -->
+<div class="status-strip" id="status-strip-bar" onclick="scrollToActiveGoal()" role="status" aria-live="polite">
+    <span class="status-strip-text" id="ss-text"></span>
+    <span class="status-strip-phase" id="ss-phase"></span>
+    <div class="status-strip-bar"><div class="status-strip-fill" id="ss-fill"></div></div>
+</div>
+
 <!-- ═══ DESKTOP (the main surface — goal cards live here) ═══ -->
-<div class="desktop" id="desktop" onclick="closeChatOverlay()">
+<main class="desktop" id="desktop" onclick="closeChatOverlay()" role="main" aria-label="Goal workspace">
     <!-- Welcome state (shown when no goals) -->
     <div class="welcome" id="welcome-state">
         <h2>What do you want me to handle?</h2>
@@ -5204,10 +5315,10 @@ const _providerMeta = {
                   models: ['sonar-pro','sonar','sonar-reasoning-pro'] },
     cohere:     { hint: 'dashboard.cohere.com', placeholder: 'sk-...', local: false, baseUrl: 'https://api.cohere.com/v2',
                   models: ['command-r-plus','command-r','command-a-03-2025'] },
-    lmstudio:   { hint: 'Free, local. Start LM Studio first.', placeholder: 'not needed', local: true, baseUrl: 'http://host.docker.internal:1234/v1',
+    lmstudio:   { hint: 'Free, local. Start LM Studio first.', placeholder: 'not needed', local: true, baseUrl: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'http://localhost:1234/v1' : 'http://host.docker.internal:1234/v1',
                   models: ['local-model'] },
-    ollama:     { hint: 'Free, local. Start Ollama first.', placeholder: 'not needed', local: true, baseUrl: 'http://host.docker.internal:11434/v1',
-                  models: ['llama3.3','qwen2.5','deepseek-r1','gemma2'] },
+    ollama:     { hint: 'Free, local. Start Ollama first.', placeholder: 'not needed', local: true, baseUrl: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'http://localhost:11434/v1' : 'http://host.docker.internal:11434/v1',
+                  models: ['llama3.3','qwen2.5','deepseek-r1','gemma4','gemma2'] },
     custom:     { hint: 'Any OpenAI-compatible API', placeholder: 'your-api-key', local: false, baseUrl: '',
                   models: [] },
 };

@@ -21,6 +21,16 @@ class ConnectionFailedError(Exception):
     pass
 
 
+class ContextOverflowError(Exception):
+    """Raised when the prompt exceeds the model's context window (400)."""
+    pass
+
+
+class ModelNotFoundError(Exception):
+    """Raised when the model ID is not available on the provider (400)."""
+    pass
+
+
 class AnthropicProvider(BaseLLMProvider):
     def __init__(self, api_key: str, model: str = "claude-haiku-4-5-20251001", base_url: str = ""):
         kwargs: dict = {"api_key": api_key}

@@ -933,8 +933,22 @@ async def evolution_loop(bus: EventBus, audit: AuditTrail, loom,
 
     # Initialize DemandSolver — persistent across cycles (tracks attempts/escalation)
     # Knowledge stored as .md files (LLM-native), not SQLite.
+    # Pass LLM tier from boot probe so solver doesn't attempt codegen with weak models.
+    _llm_tier = "full"
+    try:
+        from agos.setup_store import get_llm_capability
+        import os as _os
+        for _ws in [".opensculpt", _os.path.join(_os.getcwd(), ".opensculpt")]:
+            if _os.path.isdir(_ws):
+                _cap = get_llm_capability(_ws)
+                if _cap:
+                    _llm_tier = _cap.get("tier", "full")
+                break
+    except Exception:
+        pass
+    _logger.info("Evolution solver LLM tier: %s", _llm_tier)
     from agos.evolution.demand_solver import DemandSolver
-    demand_solver = DemandSolver(bus, audit, demand_collector, evo_memory)
+    demand_solver = DemandSolver(bus, audit, demand_collector, evo_memory, llm_tier=_llm_tier)
 
     # Initialize SourcePatcher — self-modifying code engine
     # When the OS detects infrastructure problems (database locks, tool bugs),

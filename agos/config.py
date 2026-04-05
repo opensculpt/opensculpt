@@ -85,6 +85,9 @@ class AgosSettings(BaseSettings):
     # Dashboard security
     dashboard_api_key: str = ""  # Set SCULPT_DASHBOARD_API_KEY to require auth
 
+    # LLM capability probe
+    model_context_window: int = 0  # 0 = auto-detect from probe/known table; set to override (e.g. 8192)
+
     # Approval settings (dashboard human-in-the-loop)
     approval_mode: str = "auto"  # "auto" (default for desktop), "confirm-dangerous", "confirm-all"
     approval_timeout_seconds: int = 30  # 30 seconds (was 300 — too long for interactive use)

@@ -42,6 +42,9 @@ class DemandSignal:
     attempts: int = 0         # how many times evolution tried to resolve this
     last_attempt: float = 0   # when evolution last attempted resolution
     status: str = "active"    # active | attempting | escalated | resolved
+    # Feedback loop — track what was tried so the LLM doesn't repeat failures
+    failed_actions: list[str] = field(default_factory=list)  # ["create_tool", "patch_source"]
+    last_failure: str = ""    # human-readable reason the last attempt failed
 
     @property
     def age_hours(self) -> float:
@@ -129,6 +132,7 @@ class DemandCollector:
         bus.subscribe("evolution.impasse", self._on_impasse)
         bus.subscribe("os.memory_critical", self._on_memory_critical)
         bus.subscribe("os.memory_warning", self._on_memory_warning)
+        bus.subscribe("os.phase_skipped", self._on_phase_skipped)
         _logger.info("DemandCollector subscribed to failure events")
 
     # ── Event handlers ──
@@ -336,6 +340,26 @@ class DemandCollector:
                 "category": category,
                 "goal": goal_desc,
                 "attempt": attempt,
+            },
+        )
+
+    async def _on_phase_skipped(self, event: Event) -> None:
+        """User manually skipped a phase — the OS failed to do its job."""
+        phase = event.data.get("phase", "unknown")
+        reason = event.data.get("reason", "")
+        goal_id = event.data.get("goal_id", "")
+        original_error = event.data.get("original_error", "")[:200]
+        self._add_signal(
+            key=f"user_skip:{phase}",
+            kind="user_skip",
+            source="dashboard",
+            description=f"User skipped phase '{phase}': {reason}. Original error: {original_error}",
+            priority=0.8,  # High — user had to intervene
+            context={
+                "phase": phase,
+                "reason": reason,
+                "goal_id": goal_id,
+                "original_error": original_error,
             },
         )
 

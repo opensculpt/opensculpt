@@ -104,6 +104,76 @@ def _run_wizard():
         elif choice.lower() == "s":
             console.print("  [dim]Skipped — configure later with: agos provider configure[/dim]")
 
+    # Step 1.5: Probe LLM capability (if provider configured)
+    if provider_configured:
+        console.print("\n[dim]Testing your model...[/dim]")
+        try:
+            from agos.llm.probe import LLMProbe, LLMCapability
+            from agos.setup_store import load_setup, set_llm_capability
+            from agos.llm.providers import ALL_PROVIDERS
+            from agos.cli.context import run_async
+            import inspect
+
+            data = load_setup(settings.workspace_dir)
+            providers = data.get("providers", {})
+            # Find the first enabled provider and build it
+            _probe_provider = None
+            for pname, pcfg in providers.items():
+                if not pcfg.get("enabled"):
+                    continue
+                cls = ALL_PROVIDERS.get(pname)
+                if not cls:
+                    continue
+                sig = inspect.signature(cls.__init__)
+                params = set(sig.parameters.keys()) - {"self"}
+                kwargs = {k: v for k, v in pcfg.items() if k in params and v}
+                if "token" in params and "api_key" in pcfg:
+                    kwargs["token"] = pcfg["api_key"]
+                try:
+                    _probe_provider = cls(**kwargs)
+                    break
+                except Exception:
+                    continue
+
+            if _probe_provider:
+                model_id = getattr(_probe_provider, "_model", "")
+                cap = run_async(LLMProbe.probe(_probe_provider, model_id=model_id))
+                set_llm_capability(settings.workspace_dir, cap.to_dict())
+
+                # Display results
+                if cap.reachable:
+                    console.print(f"  [green]✓[/green] Connection OK ({cap.latency_ms}ms)")
+                else:
+                    console.print(f"  [red]✗[/red] Could not reach model")
+
+                if cap.tool_calling:
+                    console.print(f"  [green]✓[/green] Tool calling works")
+                elif cap.reachable:
+                    console.print(f"  [yellow]✗[/yellow] Tool calling not supported")
+
+                if cap.context_window:
+                    console.print(f"  [green]✓[/green] Context: {cap.context_window // 1024}K")
+
+                # Capability-positive summary
+                tier = cap.tier
+                if tier == "full":
+                    console.print("\n  [green bold]✓ Ready to go![/green bold]")
+                    console.print("  Your model supports the full OpenSculpt experience.")
+                elif tier == "basic_tools":
+                    console.print("\n  [green bold]✓ Ready to go![/green bold]")
+                    console.print("  Your model supports goals and shell commands.")
+                elif tier == "chat_only":
+                    console.print("\n  [yellow bold]✓ Connected![/yellow bold]")
+                    console.print("  Your model can answer questions and have conversations.")
+                    console.print("  [dim]For running tasks, try a model with tool calling support.[/dim]")
+                else:
+                    console.print("\n  [red bold]✗ Couldn't reach your model.[/red bold]")
+                    console.print("  [dim]Check that LM Studio / Ollama is running and try again.[/dim]")
+            else:
+                console.print("  [dim]Could not build provider for testing[/dim]")
+        except Exception as e:
+            console.print(f"  [dim]Probe skipped: {e}[/dim]")
+
     # Step 2: Channels
     console.print("\n[bold blue]Step 2/4: Notification Channels[/bold blue]")
     console.print("[dim]How should OpenSculpt notify you?[/dim]\n")
@@ -386,16 +456,25 @@ def provider_test(
         if "token" in params and "api_key" in cfg:
             kwargs["token"] = cfg["api_key"]
         provider = cls(**kwargs)
-        return await provider.complete(
-            [LLMMessage(role="user", content="Say hello in 5 words.")],
-            max_tokens=50,
-        )
+        # Run full probe instead of simple heartbeat
+        from agos.llm.probe import LLMProbe
+        model_id = getattr(provider, "_model", cfg.get("model", ""))
+        return await LLMProbe.probe(provider, model_id=model_id)
 
     with console.status(f"[bold cyan]Testing {name}...", spinner="dots"):
         try:
-            resp = run_async(_test())
-            console.print(f"[green]OK[/green] — {resp.content}")
-            console.print(f"[dim]Tokens: {resp.output_tokens}[/dim]")
+            cap = run_async(_test())
+            if cap.reachable:
+                console.print(f"[green]OK[/green] — {cap.model_id} (latency: {cap.latency_ms}ms)")
+                console.print(f"  Tool calling: {'✓' if cap.tool_calling else '✗'}")
+                console.print(f"  Arg fidelity: {'✓' if cap.tool_arg_fidelity else '✗'}")
+                console.print(f"  Context: {cap.context_window // 1024}K")
+                console.print(f"  Tier: [bold]{cap.tier}[/bold]")
+            else:
+                console.print(f"[red]Failed:[/red] Could not reach model")
+                raise SystemExit(1)
+        except SystemExit:
+            raise
         except Exception as e:
             console.print(f"[red]Failed:[/red] {e}")
             raise SystemExit(1)
