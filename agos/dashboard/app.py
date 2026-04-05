@@ -2945,6 +2945,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .desktop { position: absolute; top: 32px; left: 0; right: 0; bottom: 100px; overflow-y: auto; overflow-x: hidden; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; align-content: start; z-index: 1; max-width: 1440px; margin: 0 auto; }
 .desktop.has-status { top: 76px; }
 .desktop.has-nudge { top: 68px; }
+.desktop.has-status.has-nudge { top: 120px; }
 .desktop::-webkit-scrollbar { width: 4px; }
 .desktop::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
 
@@ -3284,9 +3285,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 /* ── Touch Targets (a11y) ── */
 .cmd-send, .cmd-mic { min-width: 44px; min-height: 44px; }
 
-/* ── Reduced Motion (a11y) ── */
+/* ── Reduced Motion (a11y) — only decorative animations, keep functional transitions ── */
 @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+    .goal-card, .goal-card:hover, .special-card, .toast, .wizard-box, .evo-nudge, body::before { animation: none !important; }
+    .goal-card-ring .ring-fill { animation: none !important; }
+    .cmd-mic.recording { animation: none !important; }
+    .skeleton { animation: none !important; }
+    .think-dots span { animation: none !important; }
+    .goal-card.just-completed { animation: none !important; }
 }
 </style>
 </head>
@@ -3332,32 +3338,37 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         <h2>What do you want me to handle?</h2>
         <p>Type a command below. Try "run sales for my startup" or "set up monitoring"</p>
     </div>
-</div>
+</main>
 
 <!-- ═══ CHAT OVERLAY (slides up from command bar) ═══ -->
 <div class="chat-backdrop" id="chat-backdrop" onclick="closeChatOverlay()"></div>
-<div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()">
+<div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()" role="complementary" aria-label="Conversation">
     <div class="chat-overlay-header">
         <span>Conversation</span>
         <div style="display:flex;gap:8px;align-items:center">
-            <button onclick="clearChat()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer">Clear</button>
-            <button class="chat-overlay-close" onclick="closeChatOverlay()">&times;</button>
+            <button onclick="clearChat()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer" aria-label="Clear conversation">Clear</button>
+            <button class="chat-overlay-close" onclick="closeChatOverlay()" aria-label="Close conversation">&times;</button>
         </div>
     </div>
-    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-messages" id="chat-messages">
+        <div class="chat-empty" id="chat-empty-state">
+            <h3>Talk to OpenSculpt</h3>
+            <p>Ask me to set up software, manage services, or handle tasks for your business.</p>
+        </div>
+    </div>
 </div>
 
 <!-- ═══ STATUS LINE (above command bar) ═══ -->
 <div id="status-line" style="position:fixed;bottom:92px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--text2);z-index:50;text-align:center;max-width:600px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></div>
 
 <!-- ═══ COMMAND BAR (Spotlight-style, always visible) ═══ -->
-<div class="command-bar" id="command-bar" onclick="event.stopPropagation()">
+<div class="command-bar" id="command-bar" onclick="event.stopPropagation()" role="search" aria-label="Command bar">
     <div class="command-bar-inner">
-        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="toggleChatOverlay()" title="Toggle conversation">
+        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="toggleChatOverlay()" title="Toggle conversation" role="button" aria-label="Toggle conversation">
         <input type="text" class="cmd-input" id="os-cmd" placeholder="Ask OpenSculpt anything..." autocomplete="off"
-               onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" />
-        <button class="cmd-send" onclick="runCommand()" title="Send">&#9654;</button>
-        <button class="cmd-mic" id="mic-btn" onclick="toggleVoice()" title="Voice">&#x1F3A4;</button>
+               onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" aria-label="Command input" />
+        <button class="cmd-send" id="cmd-send-btn" onclick="runCommand()" title="Send" aria-label="Send command"><span>&#9654;</span></button>
+        <button class="cmd-mic" id="mic-btn" onclick="toggleVoice()" title="Voice input" aria-label="Voice input">&#9834;</button>
     </div>
     <div class="prompt-chips" id="prompt-chips">
         <span class="prompt-chip" onclick="quickCmd('handle sales for my startup')">Sales CRM</span>
@@ -3369,7 +3380,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 </div>
 
 <!-- ═══ DOCK (bottom bar — running daemons + vitals) ═══ -->
-<div class="dock" id="dock">
+<nav class="dock" id="dock" role="navigation" aria-label="Running services">
     <div id="dock-daemons" style="display:flex;align-items:center;gap:4px"></div>
     <div class="dock-sep"></div>
     <div class="dock-vitals">
@@ -3377,7 +3388,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         <span>RAM <span id="dk-ram">-</span></span>
         <span id="dk-nodes-label" style="display:none">Nodes <span id="dk-nodes">-</span></span>
     </div>
-</div>
+</nav>
 
 <!-- ═══ DETAIL MODAL (expanded card view) ═══ -->
 <div class="detail-modal" id="detail-modal" onclick="if(event.target===this)closeDetail()">
@@ -3708,6 +3719,7 @@ let _daemonData = [];
 let _learnedData = [];
 let _chatHistory = [];
 let _collapsedGoals = new Set();  // tracks which goal cards have phases collapsed
+let _celebratedGoals = new Set(); // tracks goal IDs that have been celebrated
 let _expandedResources = new Set();  // tracks which resource sections are expanded
 // auto-share removed — users share via git PRs
 
@@ -3789,6 +3801,10 @@ function cleanServiceName(name) {
 function statusLabel(s) {
     if (s === 'needs_user') return 'Needs setup';
     return s || 'unknown';
+}
+function scrollToActiveGoal() {
+    const activeCard = document.querySelector('.goal-card.active-goal');
+    if (activeCard) activeCard.scrollIntoView({behavior: 'smooth', block: 'center'});
 }
 let _connectionLost = false;
 async function fetchJSON(url) {
@@ -4485,11 +4501,19 @@ function quickCmd(cmd) {
     setTimeout(() => openChatOverlay(), 300);
 }
 
+let _isSending = false;
 async function runCommand() {
     const input = document.getElementById('os-cmd');
     const cmd = input.value.trim();
-    if (!cmd) return;
+    if (!cmd || _isSending) return;
     input.value = '';
+
+    // Sending state — prevent double-fire
+    _isSending = true;
+    const _goalCountBefore = _goalData ? _goalData.length : 0;
+    const sendBtn = document.getElementById('cmd-send-btn');
+    input.classList.add('sending');
+    if (sendBtn) sendBtn.classList.add('sending');
 
     // Hide welcome screen but keep chips for quick actions
     const welcomeEl = document.getElementById('welcome-state');
@@ -4515,7 +4539,7 @@ async function runCommand() {
     // Add thinking indicator in chat (user can open chat to see details)
     const thinkBubble = document.createElement('div');
     thinkBubble.className = 'chat-os';
-    thinkBubble.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:6px;height:6px;background:var(--cyan);border-radius:50%;animation:dotPulse 1s infinite"></span> Processing...</div><div id="live-events" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>';
+    thinkBubble.innerHTML = '<div class="think-dots"><span></span><span></span><span></span> <span style="font-size:12px;color:var(--text2);margin-left:4px">Thinking...</span></div><div id="live-events" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>';
     chatArea.appendChild(thinkBubble);
     chatArea.scrollTop = chatArea.scrollHeight;
 
@@ -4585,10 +4609,26 @@ async function runCommand() {
         thinkBubble.innerHTML = e.name === 'AbortError' ? 'Timed out — check the desktop for progress.' : 'Failed: ' + esc(e.message);
     } finally {
         if (liveWs) try { liveWs.close(); } catch(e) {}
+        // Reset sending state
+        _isSending = false;
+        const _input = document.getElementById('os-cmd');
+        const _sendBtn = document.getElementById('cmd-send-btn');
+        if (_input) _input.classList.remove('sending');
+        if (_sendBtn) _sendBtn.classList.remove('sending');
     }
     chatArea.scrollTop = chatArea.scrollHeight;
+    // Hide chat empty state after first message
+    const emptyState = document.getElementById('chat-empty-state');
+    if (emptyState) emptyState.style.display = 'none';
     // Refresh desktop after command
     refreshDesktop();
+    // Auto-minimize chat overlay if a NEW goal was created (compare count before/after)
+    setTimeout(() => {
+        if (_goalData && _goalData.length > _goalCountBefore) {
+            closeChatOverlay();
+            showToast('Goal created — check the desktop', 'success');
+        }
+    }, 1500);
 }
 
 /* ── Voice Input ── */
@@ -4739,32 +4779,69 @@ async function refreshDesktop() {
         }
     }
 
-    // Status line — show what the OS is doing right now
-    const statusLine = document.getElementById('status-line');
-    if (statusLine) {
+    // Status strip — show what the OS is doing right now (replaces old status-line)
+    const statusStrip = document.getElementById('status-strip-bar');
+    const ssText = document.getElementById('ss-text');
+    const ssPhase = document.getElementById('ss-phase');
+    const ssFill = document.getElementById('ss-fill');
+    const desktop2 = document.getElementById('desktop');
+    if (statusStrip && ssText && ssPhase && ssFill) {
         const activeGoal = goalList.find(g => g.status === 'active' || g.status === 'operating');
         if (activeGoal) {
+            statusStrip.classList.add('active');
+            if (desktop2) desktop2.classList.add('has-status');
             const ap = (activeGoal.phases || []).find(p => p.status === 'running');
             const doneCnt = (activeGoal.phases || []).filter(p => p.status === 'done' || p.status === 'done_unverified').length;
             const totalCnt = (activeGoal.phases || []).length;
-            if (ap) {
-                statusLine.textContent = 'Working on: ' + ap.name + ' (' + doneCnt + '/' + totalCnt + ')';
-                statusLine.style.color = 'var(--cyan)';
-            } else {
-                statusLine.textContent = activeGoal.description.slice(0, 60) + ' (' + doneCnt + '/' + totalCnt + ' phases)';
-                statusLine.style.color = 'var(--text2)';
-            }
+            const pctDone = totalCnt > 0 ? Math.round(doneCnt / totalCnt * 100) : 0;
+            ssText.textContent = extractTitle(activeGoal.description || '') + ' — ' + doneCnt + '/' + totalCnt;
+            ssPhase.textContent = ap ? '\u25B6 ' + (ap.name || '').replace(/_/g, ' ') : '';
+            ssPhase.style.color = '';  // Reset from potential green (all-done state)
+            ssFill.style.width = pctDone + '%';
         } else if (goalList.length) {
             const allDone = goalList.every(g => {
                 const p = g.phases || [];
                 return p.length > 0 && p.every(ph => ph.status === 'done' || ph.status === 'done_unverified');
             });
-            statusLine.textContent = allDone ? 'All goals complete' : 'Idle';
-            statusLine.style.color = 'var(--green)';
+            if (allDone) {
+                statusStrip.classList.add('active');
+                if (desktop2) desktop2.classList.add('has-status');
+                const svcCount = (servicesList || []).filter(s => s.status === 'healthy').length;
+                ssText.textContent = svcCount > 0 ? 'All goals complete \u00B7 ' + svcCount + ' services' : 'All goals complete';
+                ssPhase.textContent = svcCount > 0 ? '\u25CF running' : '';
+                ssPhase.style.color = 'var(--green)';
+                ssFill.style.width = '100%';
+            } else {
+                statusStrip.classList.remove('active');
+                if (desktop2) desktop2.classList.remove('has-status');
+            }
         } else {
-            statusLine.textContent = '';
+            statusStrip.classList.remove('active');
+            if (desktop2) desktop2.classList.remove('has-status');
         }
     }
+    // Legacy status line (kept for compat)
+    const statusLine = document.getElementById('status-line');
+    if (statusLine) statusLine.textContent = '';
+
+    // Goal completion celebration — detect newly completed goals
+    goalList.forEach((g, i) => {
+        const phases = g.phases || [];
+        const allDone = phases.length > 0 && phases.every(p => p.status === 'done' || p.status === 'done_unverified');
+        const cardEl = document.getElementById('gcard-' + i);
+        if (allDone && cardEl && !_celebratedGoals.has(g.id)) {
+            _celebratedGoals.add(g.id);
+            cardEl.classList.add('just-completed');
+            // Find service URL for this goal
+            const goalSvcs = (servicesList || []).filter(s => s.goal_id === g.id && s.url);
+            const svcUrl = goalSvcs.length ? goalSvcs[0].url : '';
+            const svcMsg = svcUrl ? ' Open: ' + svcUrl : '';
+            showToast('Goal complete: ' + extractTitle(g.description || '') + svcMsg, 'success');
+            // Remove celebration class after 2s, but keep full opacity for 30s
+            setTimeout(() => { if (cardEl) cardEl.classList.remove('just-completed'); }, 2000);
+            setTimeout(() => { if (cardEl) cardEl.style.opacity = ''; }, 30000);
+        }
+    });
 
     // Render dock
     renderDock(daemons);
