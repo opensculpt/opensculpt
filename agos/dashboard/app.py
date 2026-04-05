@@ -4468,10 +4468,13 @@ function onCmdFocus() {
 
 function toggleChatOverlay() {
     const overlay = document.getElementById('chat-overlay');
+    const backdrop = document.getElementById('chat-backdrop');
     if (overlay.classList.contains('active')) {
         overlay.classList.remove('active');
-    } else if (_chatHistory.length > 0) {
+        if (backdrop) backdrop.classList.remove('active');
+    } else {
         overlay.classList.add('active');
+        if (backdrop) backdrop.classList.add('active');
     }
 }
 
