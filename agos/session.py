@@ -262,7 +262,7 @@ class MemoryFlushCondenser(SummaryCondenser):
         self._flush_to_skills(messages)
         return super().compact(messages)
 
-    def _flush_to_skills(self, messages: list[dict]) -> None:
+    def _flush_to_skills(self, messages: list) -> None:  # list[dict | LLMMessage]
         """Extract key operational facts and save as skill docs."""
         try:
             skills_dir = Path(".opensculpt/skills")
@@ -270,7 +270,13 @@ class MemoryFlushCondenser(SummaryCondenser):
 
             facts = []
             for msg in messages:
-                resp = str(msg.get("response", ""))
+                # Handle both dict (conversation history) and LLMMessage (execute loop)
+                if isinstance(msg, dict):
+                    resp = str(msg.get("response", ""))
+                else:
+                    content = getattr(msg, "content", "")
+                    role = getattr(msg, "role", "")
+                    resp = str(content)[:500] if role == "assistant" and isinstance(content, str) else ""
                 # Extract service deployments
                 if any(w in resp.lower() for w in ["deployed", "started", "running on port"]):
                     facts.append(resp.split("\n")[0][:200])
