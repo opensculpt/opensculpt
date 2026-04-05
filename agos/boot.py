@@ -169,6 +169,57 @@ async def boot_system(runtime, bus: EventBus, audit: AuditTrail,
 
     await bus.emit("system.ready", {"version": "0.1.0", "evolution": loom is not None}, source="kernel")
 
+    # ── LLM Capability Probe (async, runs while dashboard loads) ──
+    if llm_provider:
+        await bus.emit("system.boot", {"phase": "llm_probe", "detail": "Testing LLM capabilities..."}, source="kernel")
+        _logger.info("Testing LLM: %s ...", getattr(llm_provider, "_model", "unknown"))
+
+        async def _run_probe():
+            try:
+                from agos.llm.probe import LLMProbe
+                model_id = getattr(llm_provider, "_model", "") or _settings.default_model or ""
+                # The evolution LMStudioProvider doesn't pass tools to the API.
+                # Use the standard LLM provider (from agos/llm/providers.py) for probing
+                # since it handles tool calling via _OpenAICompatible.
+                probe_provider = llm_provider
+                try:
+                    from agos.llm.providers import LMStudioProvider as _StdLMS
+                    if type(llm_provider).__module__.startswith("agos.evolution"):
+                        base_url = getattr(llm_provider, "_base_url", "http://localhost:1234/v1")
+                        # Strip /v1 if present (std provider adds it)
+                        base = base_url.rstrip("/")
+                        if base.endswith("/v1"):
+                            base = base[:-3]
+                        probe_provider = _StdLMS(model=model_id, base_url=base)
+                except Exception:
+                    pass
+                cap = await LLMProbe.probe(probe_provider, model_id=model_id)
+                await bus.emit("system.llm_probed", cap.to_dict(), source="kernel")
+                # Persist capability
+                try:
+                    from agos.setup_store import set_llm_capability
+                    import os as _os
+                    for ws in [str(_settings.workspace_dir), _os.path.join(_os.getcwd(), ".opensculpt")]:
+                        if _os.path.isdir(ws):
+                            set_llm_capability(ws, cap.to_dict())
+                            break
+                except Exception:
+                    pass
+                if cap.tier == "dead":
+                    _logger.warning("LLM unreachable. Dashboard will show offline banner.")
+                    await bus.emit("system.boot_failed", {"reason": "LLM unreachable"}, source="kernel")
+                else:
+                    _logger.info("LLM ready: %s (tier=%s, tool_calling=%s, context=%d)",
+                                 cap.model_id, cap.tier, cap.tool_calling, cap.context_window)
+            except Exception as exc:
+                _logger.warning("LLM probe failed: %s", exc)
+
+        # Run probe SYNCHRONOUSLY before evolution starts.
+        # Local models (LM Studio/Ollama) process one request at a time.
+        # If probe runs in parallel with evolution, the tool test gets queued
+        # and times out, misclassifying the model as chat_only.
+        await _run_probe()
+
     # Launch knowledge consolidation in background (compresses old memories)
     if loom:
         asyncio.create_task(_consolidation_loop(loom, bus, audit))

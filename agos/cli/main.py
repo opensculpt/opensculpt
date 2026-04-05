@@ -1320,6 +1320,7 @@ def verify():
         console.print(f"\n[yellow]⚡ {total} demands remaining. Keep going or run `sculpt contribute` to share what you have.[/yellow]")
 
 
+
 @_app.command("seed")
 def seed(
     release_dir: str = typer.Argument(

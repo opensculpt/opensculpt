@@ -287,6 +287,11 @@ Return JSON only:
                 phases = parsed.get("phases", parsed.get("steps", []))
                 strategy = parsed.get("strategy", "sequential")
 
+            # Normalize flat string phases (weak models like Gemma send ["step1", "step2"])
+            if phases and isinstance(phases[0], str):
+                phases = [{"name": f"Phase {i+1}", "description": step, "command": step, "verify_type": "auto", "verify": ""} for i, step in enumerate(phases)]
+                _logger.info("Normalized %d flat string phases to objects", len(phases))
+
             result = []
             for i, p in enumerate(phases):
                 result.append({

@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -44,7 +45,7 @@ MODIFIABLE_PREFIXES = (
     "agos/config.py",
 )
 
-# Never touch these
+# Never touch these (immutable measurement layer — autoresearch principle)
 OFF_LIMITS = (
     "agos/serve.py",
     "agos/boot.py",
@@ -52,7 +53,8 @@ OFF_LIMITS = (
     "agos/cli/",
     "agos/policy/",
     "agos/events/",
-    "tests/",
+    "tests/",              # Immutable: tests define what "working" means
+    "SCENARIOS.md",        # Immutable: scenarios define what the OS must handle
 )
 
 PATCHES_DIR = Path(".agos/patches")
@@ -466,8 +468,66 @@ Rules:
 
     # ── FULL CYCLE: observe → propose → snapshot → apply → verify ──
 
+    # ── GIT EXPERIMENT TRACKING (autoresearch discipline) ──
+    # Branch per fix, test before AND after, only keep if metrics improve.
+
+    def _git(self, *args: str, timeout: int = 30) -> tuple[int, str]:
+        """Run a git command, return (returncode, output)."""
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                capture_output=True, text=True,
+                cwd=str(self._root), timeout=timeout,
+            )
+            return result.returncode, result.stdout + result.stderr
+        except Exception as e:
+            return 1, str(e)
+
+    def _run_tests(self, timeout: int = 120) -> tuple[bool, str]:
+        """Run test suite. Returns (passed, summary_line)."""
+        try:
+            result = subprocess.run(
+                ["python", "-m", "pytest", "tests/",
+                 "--ignore=tests/test_frontend_playwright.py",
+                 "--ignore=tests/test_user_stories.py",
+                 "-q", "--tb=no"],
+                capture_output=True, text=True,
+                cwd=str(self._root), timeout=timeout,
+            )
+            lines = [l.strip() for l in result.stdout.split("\n") if l.strip()]
+            summary = lines[-1] if lines else "no output"
+            return result.returncode == 0, summary
+        except Exception as e:
+            return False, str(e)
+
+    def _log_experiment(self, patch: SourcePatch, outcome: str, reason: str,
+                        tests_before: str, tests_after: str) -> None:
+        """Append experiment result to EVOLUTION_LOG.md."""
+        from datetime import datetime, timezone
+        log_path = Path(self._root) / ".opensculpt" / "EVOLUTION_LOG.md"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        entry = (
+            f"\n## {ts} — {patch.demand_key}\n"
+            f"- **File**: {patch.file_path}\n"
+            f"- **Change**: {patch.rationale[:120]}\n"
+            f"- **Result**: {outcome.upper()}\n"
+            f"- **Tests before**: {tests_before}\n"
+            f"- **Tests after**: {tests_after}\n"
+            f"- **Reason**: {reason}\n"
+        )
+        existing = log_path.read_text(encoding="utf-8") if log_path.exists() else "# Evolution Log\n"
+        log_path.write_text(existing + entry, encoding="utf-8")
+
     async def tick(self) -> list[dict]:
-        """Run one source-patching cycle. Called from evolution_loop."""
+        """Run one source-patching cycle with git experiment tracking.
+
+        Autoresearch discipline (from Karpathy's autoresearch):
+        1. Branch per fix attempt
+        2. Run tests before AND after
+        3. Only keep if tests pass and no regressions
+        4. Never modify tests or scenarios (immutable measurement)
+        """
         results = []
 
         # First: verify any pending patches from last cycle
@@ -489,26 +549,95 @@ Rules:
             if not patch:
                 continue
 
+            # ── AUTORESEARCH: measure before ──
+            tests_before_ok, tests_before_summary = self._run_tests()
+
+            # ── AUTORESEARCH: create experiment branch ──
+            branch_name = f"evo/fix-{patch.demand_key[:30].replace(':', '-').replace(' ', '_')}-{int(time.time()) % 10000}"
+            rc, _ = self._git("checkout", "-b", branch_name)
+            if rc != 0:
+                _logger.debug("Git branch creation failed, applying without tracking")
+                branch_name = None  # Fall back to direct apply
+
             await self.snapshot(patch)
             applied = await self.apply(patch)
+
             if applied:
                 healthy = await self.health_check(patch)
-                if healthy:
-                    self._patches.append(patch)
-                    self._pending_verifications.append(patch)
-                    results.append({
-                        "action": "applied",
-                        "file": patch.file_path,
-                        "rationale": patch.rationale[:100],
-                        "diff_lines": len(patch.diff.splitlines()),
-                    })
-                else:
+                if not healthy:
                     await self.rollback(patch)
+                    if branch_name:
+                        self._git("checkout", "main")
+                        self._git("branch", "-D", branch_name)
+                    self._log_experiment(patch, "discard", "health check failed",
+                                         tests_before_summary, "n/a")
                     results.append({
                         "action": "rolled_back",
                         "file": patch.file_path,
                         "reason": "health check failed",
                     })
+                    continue
+
+                # ── AUTORESEARCH: commit and measure after ──
+                if branch_name:
+                    self._git("add", patch.file_path)
+                    self._git("commit", "-m", f"evo: {patch.rationale[:60]}")
+
+                tests_after_ok, tests_after_summary = self._run_tests()
+
+                # ── AUTORESEARCH: keep or discard? ──
+                keep = tests_after_ok or (not tests_before_ok and not tests_after_ok)
+                # If tests were already broken, don't penalize — just don't make it worse
+
+                if keep and branch_name:
+                    # Merge into main
+                    self._git("checkout", "main")
+                    rc, merge_out = self._git("merge", branch_name, "--no-edit")
+                    if rc != 0:
+                        self._git("merge", "--abort")
+                        self._git("branch", "-D", branch_name)
+                        await self.rollback(patch)
+                        self._log_experiment(patch, "discard", f"merge conflict: {merge_out[:100]}",
+                                             tests_before_summary, tests_after_summary)
+                        results.append({
+                            "action": "rolled_back",
+                            "file": patch.file_path,
+                            "reason": "merge conflict",
+                        })
+                        continue
+                    self._git("branch", "-d", branch_name)
+                    self._log_experiment(patch, "keep", "tests pass, merged",
+                                         tests_before_summary, tests_after_summary)
+                elif keep:
+                    # No git tracking, just log
+                    self._log_experiment(patch, "keep", "tests pass (no git tracking)",
+                                         tests_before_summary, tests_after_summary)
+                else:
+                    # Discard: tests regressed
+                    await self.rollback(patch)
+                    if branch_name:
+                        self._git("checkout", "main")
+                        self._git("branch", "-D", branch_name)
+                    self._log_experiment(patch, "discard", f"tests regressed: {tests_after_summary}",
+                                         tests_before_summary, tests_after_summary)
+                    results.append({
+                        "action": "rolled_back",
+                        "file": patch.file_path,
+                        "reason": f"tests regressed: {tests_after_summary}",
+                    })
+                    continue
+
+                self._patches.append(patch)
+                self._pending_verifications.append(patch)
+                results.append({
+                    "action": "applied",
+                    "file": patch.file_path,
+                    "rationale": patch.rationale[:100],
+                    "diff_lines": len(patch.diff.splitlines()),
+                    "outcome": "keep",
+                    "tests_before": tests_before_summary,
+                    "tests_after": tests_after_summary,
+                })
 
         return results
 

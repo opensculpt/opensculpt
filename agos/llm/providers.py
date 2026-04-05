@@ -119,6 +119,12 @@ class _OpenAICompatible(BaseLLMProvider):
                     continue
                 if resp.status_code >= 400:
                     body = resp.text[:500]
+                    body_lower = body.lower()
+                    from agos.llm.anthropic import ContextOverflowError, ModelNotFoundError
+                    if "context" in body_lower or "too long" in body_lower or "exceed" in body_lower:
+                        raise ContextOverflowError(f"Context window exceeded: {body}")
+                    if ("model" in body_lower and ("not found" in body_lower or "load" in body_lower)) or "invalid_model" in body_lower:
+                        raise ModelNotFoundError(f"Model not available: {body}")
                     raise RuntimeError(f"LLM provider returned HTTP {resp.status_code}: {body}")
                 try:
                     data = resp.json()
@@ -474,7 +480,7 @@ class OllamaProvider(_OpenAICompatible):
     name = "ollama"
     description = "Ollama local models"
 
-    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
+    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434", **kwargs):
         base = base_url.rstrip("/")
         if base.endswith("/v1"):
             base = base[:-3]
@@ -488,7 +494,7 @@ class LMStudioProvider(_OpenAICompatible):
     name = "lmstudio"
     description = "LM Studio local models"
 
-    def __init__(self, model: str = "auto", base_url: str = "http://localhost:1234"):
+    def __init__(self, model: str = "auto", base_url: str = "http://localhost:1234", **kwargs):
         # Strip /v1 suffix if user already included it (setup wizard saves full URL)
         base = base_url.rstrip("/")
         if base.endswith("/v1"):

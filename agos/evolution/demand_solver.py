@@ -40,11 +40,13 @@ class DemandSolver:
         audit: AuditTrail,
         demand_collector: DemandCollector,
         evo_memory: EvolutionMemory | None = None,
+        llm_tier: str = "full",
     ):
         self._bus = event_bus
         self._audit = audit
         self._demands = demand_collector
         self._memory = evo_memory
+        self._llm_tier = llm_tier  # from boot probe: "full", "basic_tools", "chat_only", "dead"
         self._cycle = 0
 
     async def tick(self, llm=None, source_patcher=None, tool_evolver=None) -> dict:
@@ -83,10 +85,22 @@ class DemandSolver:
             if self._memory:
                 past = [i for i in self._memory.insights
                         if demand.description[:40] in (i.what_tried or "")]
+                # Escalation ladder: don't give up — rotate strategies
                 if len(past) >= 5:
+                    # Attempt 5+: mark as needs_human, stop trying
+                    if demand.status != "escalated":
+                        demand.status = "escalated"
+                        await self._bus.emit("evolution.user_action_needed", {
+                            "demand": demand.description[:200],
+                            "attempts": len(past),
+                            "failed_actions": demand.failed_actions,
+                        }, source="demand_solver")
                     result["skipped"] += 1
                     demand.mark_attempt()
                     continue
+                # Attempt 4: force escalation to user
+                if len(past) >= 4 and "tell_user" not in demand.failed_actions:
+                    demand.failed_actions.append("forced_escalate")
                 # OpenSeed lesson: after 3 symptom patches, provide the full
                 # failure chain so the LLM can reason about root cause.
                 # Data changes behavior; prompt tone doesn't.
@@ -243,27 +257,49 @@ class DemandSolver:
         if skill_context:
             prompt += f"EVOLUTION PATTERNS (follow these):\n{skill_context}\n\n"
 
-        prompt += (
-            "Pick ONE action and return JSON:\n\n"
-            '1. create_skill_doc — write a how-to for future agents (autonomous):\n'
-            '   {"action":"create_skill_doc","topic":"NAME","content":"markdown how-to text"}\n\n'
-            '2. create_tool — Python function to fix a missing capability (notify):\n'
-            '   {"action":"create_tool","name":"TOOL","code":"async def handler(x): ...","description":"what it does"}\n\n'
-            '3. patch_source — fix a bug in existing OS code, auto-tested + auto-rollback (approve):\n'
-            '   {"action":"patch_source","file":"agos/path/to/file.py","description":"what to fix"}\n'
-            '   Use when the problem is a code bug (crash, missing retry, wrong logic).\n\n'
-            '4. tell_user — environmental issues or things you cannot fix:\n'
-            '   {"action":"tell_user","message":"what you need from the user"}\n\n'
-            '5. clear — demand is stale or transient:\n'
-            '   {"action":"clear","reason":"why"}\n\n'
-            "RULES:\n"
-            "- Transient failures (timeout, rate limit) → clear with reason\n"
-            "- Environmental (missing software, wrong OS) → tell_user\n"
-            "- Code bugs → patch_source\n"
-            "- Missing capability → create_tool\n"
-            "- If docs/tools haven't worked after 2+ attempts, try patch_source.\n"
-            "Output ONLY the JSON object."
-        )
+        # ── TIER GATING: weak models can't generate code ──
+        if self._llm_tier in ("basic_tools", "chat_only"):
+            prompt += (
+                "Pick ONE action and return JSON:\n\n"
+                '1. create_skill_doc — write a how-to for future agents:\n'
+                '   {"action":"create_skill_doc","topic":"NAME","content":"markdown how-to text"}\n\n'
+                '2. tell_user — escalate to the user (environmental issues, code bugs, missing features):\n'
+                '   {"action":"tell_user","message":"what you need from the user"}\n\n'
+                '3. clear — demand is stale or transient:\n'
+                '   {"action":"clear","reason":"why"}\n\n'
+                "NOTE: Code generation (create_tool, patch_source) is disabled — "
+                "the current model cannot reliably generate working code. "
+                "Escalate code fixes to the user via tell_user.\n"
+                "Output ONLY the JSON object."
+            )
+        else:
+            prompt += (
+                "Pick ONE action and return JSON:\n\n"
+                '1. create_skill_doc — write a how-to for future agents (autonomous):\n'
+                '   {"action":"create_skill_doc","topic":"NAME","content":"markdown how-to text"}\n\n'
+                '2. create_tool — Python function to fix a missing capability (notify):\n'
+                '   {"action":"create_tool","name":"TOOL","code":"async def handler(x): ...","description":"what it does"}\n\n'
+                '3. patch_source — fix a bug in existing OS code, auto-tested + auto-rollback (approve):\n'
+                '   {"action":"patch_source","file":"agos/path/to/file.py","description":"what to fix"}\n'
+                '   Use when the problem is a code bug (crash, missing retry, wrong logic).\n\n'
+                '4. tell_user — environmental issues or things you cannot fix:\n'
+                '   {"action":"tell_user","message":"what you need from the user"}\n\n'
+                '5. clear — demand is stale or transient:\n'
+                '   {"action":"clear","reason":"why"}\n\n'
+                "RULES:\n"
+                "- Transient failures (timeout, rate limit) → clear with reason\n"
+                "- Environmental (missing software, wrong OS) → tell_user\n"
+                "- Code bugs → patch_source\n"
+                "- Missing capability → create_tool\n"
+                "- If docs/tools haven't worked after 2+ attempts, try patch_source.\n"
+                "Output ONLY the JSON object."
+            )
+
+        # ── FAILURE FEEDBACK: inject past failures so LLM doesn't repeat them ──
+        if demand.failed_actions:
+            prompt += f"\n\nPREVIOUS FAILED APPROACHES: {', '.join(demand.failed_actions)}. Try something DIFFERENT."
+        if demand.last_failure:
+            prompt += f"\nLAST FAILURE: {demand.last_failure}"
 
         text = ""
         try:
@@ -354,6 +390,15 @@ class DemandSolver:
         except Exception:
             pass
 
+        # ── TIER GATE: block codegen actions for weak models ──
+        if action_type in ("create_tool", "patch_source") and self._llm_tier in ("basic_tools", "chat_only"):
+            _logger.info("DemandSolver: blocking %s — model tier '%s' cannot generate reliable code", action_type, self._llm_tier)
+            demand.last_failure = f"{action_type} blocked: model tier '{self._llm_tier}' cannot generate code"
+            if action_type not in demand.failed_actions:
+                demand.failed_actions.append(action_type)
+            # Force escalation to user
+            return await self._try_vibe_tool(demand, env)
+
         # ── ACTION: create_tool ──
         if action_type == "create_tool":
             return await self._handle_create_tool(demand, action, env, tool_evolver)
@@ -441,6 +486,19 @@ class DemandSolver:
             else:
                 if applied:
                     await source_patcher.rollback(patch)
+                # Record failure reason so next cycle tries something different
+                reason = f"Patch to {file_path} {'applied but health_check failed — rolled back' if applied else 'could not be applied'}"
+                demand.last_failure = reason
+                if "patch_source" not in demand.failed_actions:
+                    demand.failed_actions.append("patch_source")
+                if self._memory:
+                    self._memory.record(EvolutionInsight(
+                        cycle=self._cycle,
+                        what_tried=f"patch_source:{file_path}",
+                        module=demand.source,
+                        outcome="failed",
+                        reason=reason,
+                    ))
                 try:
                     from agos.evolution.trace_store import TraceStore
                     TraceStore().write_evo_trace(self._cycle, {
@@ -451,7 +509,7 @@ class DemandSolver:
                     })
                 except Exception:
                     pass
-                return "skip"
+                return "attempted"
         except Exception as e:
             _logger.warning("DemandSolver: patch_source error: %s", e)
             return "skip"
@@ -531,22 +589,27 @@ class DemandSolver:
             except Exception as e:
                 _logger.info("DemandSolver: deploy failed for '%s': %s", name, e)
 
-        # Fallback: save code to disk for manual loading
+        # Fallback: save code to disk but DON'T claim success.
+        # The tool exists on disk but isn't registered or usable.
         evolved_dir = Path(".opensculpt/evolved")
         evolved_dir.mkdir(parents=True, exist_ok=True)
         (evolved_dir / f"{name}.py").write_text(code, encoding="utf-8")
         if self._memory:
             self._memory.record(EvolutionInsight(
                 cycle=self._cycle,
-                what_tried=f"create_tool:{name} (saved to disk)",
+                what_tried=f"create_tool:{name} (saved to disk only)",
                 module="tool_evolver",
-                outcome="success",
-                reason=f"Saved tool '{name}' to .opensculpt/evolved/{name}.py",
-                what_worked=f"Created tool '{name}' that {desc[:80]}",
-                confidence=0.7,
+                outcome="disk_only",
+                reason=f"Saved to disk but NOT deployed: .opensculpt/evolved/{name}.py",
+                what_worked="",
+                confidence=0.3,
             ))
-        _logger.info("DemandSolver: saved tool '%s' to disk", name)
-        return "tool_created"
+        # Record failure so next cycle tries a different approach
+        demand.last_failure = f"Tool '{name}' generated but deployment to registry failed"
+        if "create_tool" not in demand.failed_actions:
+            demand.failed_actions.append("create_tool")
+        _logger.info("DemandSolver: saved tool '%s' to disk (NOT deployed)", name)
+        return "attempted"
 
     async def _handle_create_skill_doc(self, demand, action, env) -> str:
         """Write a skill doc that gets injected into future agent prompts."""

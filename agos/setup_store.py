@@ -125,3 +125,19 @@ def set_preferred_vibe_tool(workspace_dir: Path | str, name: str) -> None:
     data = load_setup(workspace_dir)
     data["preferred_vibe_tool"] = name
     save_setup(workspace_dir, data)
+
+
+# ── LLM Capability helpers ─────────────────────────────────
+
+
+def get_llm_capability(workspace_dir: Path | str) -> dict:
+    """Get the cached LLM capability probe result."""
+    data = load_setup(workspace_dir)
+    return data.get("llm_capability", {})
+
+
+def set_llm_capability(workspace_dir: Path | str, capability: dict) -> None:
+    """Persist LLM capability probe result."""
+    data = load_setup(workspace_dir)
+    data["llm_capability"] = capability
+    save_setup(workspace_dir, data)

@@ -87,6 +87,23 @@ LIVE OS STATE:
 # Combined for backward compat
 SYSTEM_PROMPT = SYSTEM_PROMPT_STATIC + SYSTEM_PROMPT_DYNAMIC
 
+# ── Tier-adaptive prompts for weak models ──────────────────
+
+SYSTEM_PROMPT_BASIC = """\
+You are OpenSculpt. You help users by creating goals.
+- Use set_goal to start any task. Provide a goal and a list of steps.
+- Use check_goals to see progress.
+- Use shell to run commands.
+Be concise. One goal at a time."""
+
+SYSTEM_PROMPT_CHAT_ONLY = """\
+You are OpenSculpt, an AI assistant. Answer questions helpfully.
+You cannot execute tasks or run commands in this mode.
+If the user asks you to do something, explain what steps they could take manually."""
+
+# Core tools for basic_tools tier (only these 3 tool names are sent)
+BASIC_TOOLS_WHITELIST = {"set_goal", "check_goals", "shell"}
+
 
 class OSAgent:
     """The brain. Handles ANY request via Claude + tools + sub-agents."""
@@ -118,6 +135,7 @@ class OSAgent:
         self._intent_engine: Any = None  # Intent classification engine
         self._pattern_registry: Any = None  # Evolvable design pattern registry
         self._resource_registry: Any = None  # Linux-style resource tracking
+        self._llm_capability: Any = None  # LLMCapability from probe (None = not probed yet)
         # Loop guard - detect and break infinite tool call loops (from OpenFang)
         self._loop_guard = LoopGuard()
         # Capability gate - tool-level permissions (from OpenFang)
@@ -214,6 +232,10 @@ class OSAgent:
     def set_resource_registry(self, registry: Any) -> None:
         """Set the resource registry for tracking deployed containers, files, etc."""
         self._resource_registry = registry
+
+    def set_llm_capability(self, cap: Any) -> None:
+        """Set the LLM capability from probe. Adapts prompts/tools per tier."""
+        self._llm_capability = cap
 
     def set_daemon_manager(self, hm: Any) -> None:
         self._daemon_manager = hm
@@ -538,30 +560,44 @@ class OSAgent:
         # ── PROMPT CACHE BOUNDARY (Claude Code pattern) ──
         # Static prefix is identical across turns → cacheable (90% savings).
         # Dynamic suffix changes per turn (live state, knowledge, rules).
-        dynamic_context = self._build_os_context() + knowledge_context + os_rules
-        system = SYSTEM_PROMPT_STATIC + CACHE_BOUNDARY + SYSTEM_PROMPT_DYNAMIC.format(context=dynamic_context)
+        # ── TIER-ADAPTIVE PROMPT + TOOLS ──
+        _tier = self._llm_capability.tier if self._llm_capability else "full"
+        if _tier == "chat_only":
+            system = SYSTEM_PROMPT_CHAT_ONLY
+        elif _tier == "basic_tools":
+            system = SYSTEM_PROMPT_BASIC
+        else:
+            dynamic_context = self._build_os_context() + knowledge_context + os_rules
+            system = SYSTEM_PROMPT_STATIC + CACHE_BOUNDARY + SYSTEM_PROMPT_DYNAMIC.format(context=dynamic_context)
 
         # Inject recent conversation history for continuity
         messages: list[LLMMessage] = []
-        for h in self._conversation_history[-5:]:  # Last 5 exchanges
+        _history_limit = 2 if _tier in ("basic_tools", "chat_only") else 5
+        for h in self._conversation_history[-_history_limit:]:
             messages.append(LLMMessage(role="user", content=h["command"]))
             messages.append(LLMMessage(role="assistant", content=h["response"]))
         messages.append(LLMMessage(role="user", content=command))
-        # ── DEFERRED TOOL LOADING (Claude Code pattern) ──
-        # Tools marked deferred=True only included when keywords match command.
-        # Combined with ITR dynamic pruning. Saves ~70% tool schema tokens.
-        all_tools = self._tools.get_anthropic_tools(command=command)
-        # Fallback: if deferred loading removed too many, get all
-        if len(all_tools) < 5:
-            all_tools = self._tools.get_anthropic_tools()
 
-        # For short conversational queries, try without tools first (much faster)
-        _cmd_lower = command.lower().strip("?!. ")
-        _chat_signals = {"hi", "hello", "hey", "how are you", "how are you doing",
-                         "what are you", "who are you", "thanks", "thank you",
-                         "help", "what can you do", "good morning", "good night"}
-        use_tools = _cmd_lower not in _chat_signals and len(command.split()) > 3
-        tools = all_tools if use_tools else None
+        if _tier == "chat_only":
+            # No tools in chat_only mode
+            all_tools = []
+            tools = None
+        else:
+            # ── DEFERRED TOOL LOADING (Claude Code pattern) ──
+            all_tools = self._tools.get_anthropic_tools(command=command)
+            if len(all_tools) < 5:
+                all_tools = self._tools.get_anthropic_tools()
+            # Filter to core tools only for basic_tools tier
+            if _tier == "basic_tools":
+                all_tools = [t for t in all_tools if t["name"] in BASIC_TOOLS_WHITELIST]
+
+            # For short conversational queries, try without tools first (much faster)
+            _cmd_lower = command.lower().strip("?!. ")
+            _chat_signals = {"hi", "hello", "hey", "how are you", "how are you doing",
+                             "what are you", "who are you", "thanks", "thank you",
+                             "help", "what can you do", "good morning", "good night"}
+            use_tools = _cmd_lower not in _chat_signals and len(command.split()) > 3
+            tools = all_tools if use_tools else None
 
         steps: list[dict] = []
         tokens = 0
@@ -580,13 +616,85 @@ class OSAgent:
                     messages = _os_condenser.compact(messages)
 
                 turns += 1
-                _max_tok = 512 if tools is None else 4096
+                # ── TIER-ADAPTIVE max_tokens ──
+                if _tier == "chat_only":
+                    _max_tok = 512
+                elif _tier == "basic_tools":
+                    _max_tok = 512 if tools is None else 1024
+                else:
+                    _max_tok = 512 if tools is None else 4096
+
+                # ── PRE-CALL CONTEXT CHECK ──
+                if self._llm_capability and self._llm_capability.context_window > 0:
+                    _ctx_limit = self._llm_capability.context_window
+                    _est_input = len(system) // 4 + sum(len(str(m.content)) // 4 for m in messages)
+                    if tools:
+                        _est_input += len(tools) * 200  # ~200 tokens per tool schema
+                    if _est_input + _max_tok > int(_ctx_limit * 0.9):
+                        messages = _os_condenser.compact(messages)
+
                 resp = await self._llm.complete(
                     messages=messages, system=system,
                     tools=tools, max_tokens=_max_tok,
                 )
+
+                # ── RESPONSE TRIAGE (catch weak-model failures before acting) ──
+                _triage_retry_counts: dict[str, int] = getattr(self, "_triage_retry_counts", {})
+                _triage_hint = None
+
+                # A. Token limit hit
+                if resp.stop_reason in ("length", "max_tokens"):
+                    _k = "length"
+                    _triage_retry_counts[_k] = _triage_retry_counts.get(_k, 0) + 1
+                    if _triage_retry_counts[_k] <= 2:
+                        _triage_hint = "Your response was cut off. Be more concise."
+
+                # B. Hallucinated tool
+                if not _triage_hint and resp.tool_calls and tools:
+                    _known = {t["name"] for t in tools}
+                    _bad = [tc for tc in resp.tool_calls if tc.name not in _known]
+                    if _bad:
+                        _k = "hallucinated"
+                        _triage_retry_counts[_k] = _triage_retry_counts.get(_k, 0) + 1
+                        if _triage_retry_counts[_k] <= 2:
+                            _names = ", ".join(sorted(_known)[:5])
+                            _triage_hint = f"Tool '{_bad[0].name}' doesn't exist. Available: {_names}"
+
+                # C. Malformed tool args
+                if not _triage_hint and resp.tool_calls:
+                    for tc in resp.tool_calls:
+                        if "raw" in tc.arguments:
+                            _k = "malformed"
+                            _triage_retry_counts[_k] = _triage_retry_counts.get(_k, 0) + 1
+                            if _triage_retry_counts[_k] <= 2:
+                                _triage_hint = f"Tool call to '{tc.name}' had invalid JSON. Send valid JSON arguments."
+                            break
+
+                # D. Empty response
+                if not _triage_hint and not resp.content and not resp.tool_calls:
+                    _k = "empty"
+                    _triage_retry_counts[_k] = _triage_retry_counts.get(_k, 0) + 1
+                    if _triage_retry_counts[_k] <= 2:
+                        _triage_hint = "You returned nothing. Please respond or use a tool."
+
+                self._triage_retry_counts = _triage_retry_counts
+
+                if _triage_hint:
+                    messages.append(LLMMessage(role="user", content=_triage_hint))
+                    tokens += resp.input_tokens + resp.output_tokens
+                    self._track_usage(resp.input_tokens, resp.output_tokens)
+                    # Check if max retries exceeded for any type
+                    if any(v > 2 for v in _triage_retry_counts.values()):
+                        final_text = f"Stopped: model couldn't complete the request after retries."
+                        await self._bus.emit("os.model_failure", {
+                            "retry_counts": dict(_triage_retry_counts),
+                            "tier": _tier,
+                        }, source="os_agent")
+                        break
+                    continue
+
                 # If first turn had no tools but model seems to want action, retry with tools
-                if turns == 1 and tools is None and resp.content:
+                if turns == 1 and tools is None and _tier != "chat_only" and resp.content:
                     _resp_lower = resp.content.lower()
                     if any(w in _resp_lower for w in ["i'll run", "let me execute", "i need to use", "i'll use the"]):
                         tools = all_tools
