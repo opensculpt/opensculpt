@@ -3019,9 +3019,9 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .prompt-chip:hover { border-color: var(--purple); color: var(--text); background: rgba(168,85,247,0.08); }
 
 /* ── Chat Overlay (slides up from command bar) ── */
-.chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; }
+.chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; background: rgba(0,0,0,0.4); }
 .chat-backdrop.active { display: block; }
-.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); max-height: 60vh; background: rgba(17,19,26,0.95); border: 1px solid var(--border); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.4); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
+.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); max-height: 60vh; background: rgba(22,26,37,0.98); border: 1px solid rgba(155,122,237,0.25); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(155,122,237,0.1); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
 .chat-overlay.active { display: flex; animation: slideUp 0.3s ease; }
 .chat-overlay-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .chat-overlay-header span { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -3267,7 +3267,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 
 /* ── Chat Empty State ── */
 .chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; text-align: center; color: var(--text2); gap: 12px; }
-.chat-empty h3 { font-size: 14px; font-weight: 600; color: var(--text); }
+.chat-empty h3 { font-size: 17px; font-weight: 700; color: var(--accent2); }
 .chat-empty p { font-size: 12px; max-width: 280px; line-height: 1.5; }
 
 /* ── Thinking Indicator ── */
