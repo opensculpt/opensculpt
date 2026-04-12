@@ -24,11 +24,32 @@ from agos.a2a.server import router as a2a_router, set_server as set_a2a_server
 # ── API key authentication middleware ────────────────────────────
 _AUTH_SKIP_PATHS = frozenset({"/", "/health", "/api/status", "/docs", "/openapi.json", "/logo.jpg", "/favicon.ico"})
 
+# Endpoints blocked in spectator mode (all mutating operations)
+_SPECTATOR_BLOCKED = frozenset({
+    "/api/os/command", "/api/goals/cancel", "/api/wizard/save",
+    "/api/wizard/complete", "/api/setup/provider", "/api/setup/api-key",
+    "/api/services/restart", "/api/services/stop", "/api/services/decommission",
+    "/api/reload", "/api/mcp/connect", "/api/mcp/disconnect",
+})
+
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Require X-API-Key header when SCULPT_DASHBOARD_API_KEY is set."""
+    """Require X-API-Key header when SCULPT_DASHBOARD_API_KEY is set.
+    In spectator mode, block all POST/PUT/DELETE to mutating endpoints."""
 
     async def dispatch(self, request: Request, call_next):
+        # Spectator mode: block mutating endpoints, allow all reads
+        if settings.spectator_mode and request.method in ("POST", "PUT", "DELETE"):
+            path = request.url.path
+            # Block exact matches and prefix matches (e.g. /api/services/foo/stop)
+            if path in _SPECTATOR_BLOCKED or any(path.startswith(p) for p in _SPECTATOR_BLOCKED):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Spectator mode — read-only access"},
+                )
+        # API key auth (skip in spectator mode — public viewers don't need keys)
+        if settings.spectator_mode:
+            return await call_next(request)
         api_key = settings.dashboard_api_key
         if not api_key:
             return await call_next(request)
@@ -210,7 +231,7 @@ async def index() -> HTMLResponse:
     import json as _json
     html = _DASHBOARD_HTML.replace(
         "/*__SCULPT_API_KEY__*/",
-        f"var _SCULPT_API_KEY = {_json.dumps(key)};",
+        f"var _SCULPT_API_KEY = {_json.dumps(key)};\nvar _SPECTATOR_MODE = {'true' if settings.spectator_mode else 'false'};",
     )
     return HTMLResponse(html)
 
@@ -354,8 +375,12 @@ async def set_api_key(payload: ApiKeyPayload) -> dict:
     provider_name = payload.provider or "anthropic"
     model = payload.model or settings.default_model
 
-    if not key and provider_name != "lmstudio":
-        return {"ok": False, "error": "API key cannot be empty"}
+    # Allow model-only updates when key is already configured via env var
+    if not key and provider_name not in ("lmstudio", "ollama"):
+        existing_key = getattr(settings, 'llm_api_key', '') or ''
+        if not existing_key:
+            return {"ok": False, "error": "API key cannot be empty"}
+        key = existing_key
 
     _base_url = payload.base_url.strip() if payload.base_url else ""
 
@@ -1147,6 +1172,8 @@ async def skip_phase(goal_id: str, body: dict = {}) -> dict:
 
 @dashboard_app.get("/api/wizard/status")
 async def wizard_status() -> dict:
+    if settings.spectator_mode:
+        return {"first_run": False}  # skip wizard in spectator mode
     from agos.setup_store import is_first_run
     return {"first_run": is_first_run(pathlib.Path(settings.workspace_dir))}
 
@@ -1361,8 +1388,8 @@ async def wizard_probe() -> dict:
     ws = pathlib.Path(settings.workspace_dir)
 
     # Get the OS agent's LLM provider
-    os_agent = _get_os_agent()
-    if not os_agent or not os_agent._llm:
+    os_agent = _os_agent
+    if not os_agent or not getattr(os_agent, '_llm', None):
         return {"error": "No LLM configured. Set a provider first.", "tier": "dead"}
 
     model_id = getattr(os_agent._llm, "_model", "")
@@ -3021,7 +3048,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 /* ── Chat Overlay (slides up from command bar) ── */
 .chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; background: rgba(0,0,0,0.4); }
 .chat-backdrop.active { display: block; }
-.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); max-height: 60vh; background: rgba(22,26,37,0.98); border: 1px solid rgba(155,122,237,0.25); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(155,122,237,0.1); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
+.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); min-height: 200px; max-height: 60vh; background: rgba(22,26,37,0.98); border: 1px solid rgba(155,122,237,0.25); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(155,122,237,0.1); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
 .chat-overlay.active { display: flex; animation: slideUp 0.3s ease; }
 .chat-overlay-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .chat-overlay-header span { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -3032,7 +3059,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .chat-user { align-self: flex-end; max-width: 75%; background: var(--purple); color: #fff; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: 14px; word-wrap: break-word; }
 .chat-os { align-self: flex-start; max-width: 80%; background: var(--bg3); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: 13px; color: var(--text); line-height: 1.5; }
-.chat-os.error { border-color: var(--red); background: rgba(248,81,73,0.08); }
+.chat-os.error { border-color: var(--red); background: rgba(248,81,73,0.12); color: #fca5a5; }
 .chat-os.success { border-color: var(--green); }
 
 /* ── Dock (bottom bar, like macOS dock) ── */
@@ -3246,7 +3273,8 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 @keyframes wizShimmer { 0%,100% { transform: translateX(-100%); } 50% { transform: translateX(100%); } }
 
 /* ── Status Strip (44px, below topbar) ── */
-.status-strip { position: fixed; top: 40px; left: 0; right: 0; height: 44px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 12px; z-index: 99; backdrop-filter: blur(12px); cursor: pointer; }
+.status-strip { position: fixed; top: 40px; left: 0; right: 0; height: 44px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 12px; z-index: 98; backdrop-filter: blur(12px); cursor: pointer; }
+.status-strip.has-nudge { top: 68px; }
 .status-strip.active { display: flex; }
 .status-strip-text { font-size: 13px; font-weight: 600; color: var(--text); }
 .status-strip-phase { font-size: 12px; color: var(--cyan); }
@@ -4309,18 +4337,9 @@ function renderDock(daemons) {
         html += '<div class="dock-sep"></div>';
     }
 
-    // ── System daemons — compact, clickable for actions ──
+    // ── System daemons — only show goal_runner in dock ──
     const SYSTEM = new Set(['goal_runner', 'gc', 'researcher', 'monitor', 'digest', 'scheduler']);
-    const system = daemons.filter(d => SYSTEM.has(d.name));
     const domain = daemons.filter(d => !SYSTEM.has(d.name));
-
-    system.forEach(d => {
-        const dotClass = d.status === 'running' ? 'running' : d.status === 'error' ? 'error' : 'stopped';
-        html += '<div class="dock-item" onclick="toggleDaemonMenu(\'' + esc(d.name) + '\')" title="' + esc(d.description || d.name) + ' (click for actions)">' +
-            '<span class="dock-icon">' + (d.icon || '&#x2699;') + '</span>' +
-            '<span class="dock-label">' + esc(d.name) + '</span>' +
-            '<span class="dock-dot ' + dotClass + '"></span></div>';
-    });
 
     // ── Services pill ──
     if (domain.length > 0) {
@@ -5861,9 +5880,11 @@ async function updateNudgeBanner() {
         const demands = (data && data.active_demands) ? data.active_demands.length : 0;
         const nudge = document.getElementById('evo-nudge');
         const desktop = document.getElementById('desktop');
+        const ss = document.getElementById('status-strip-bar');
         if (demands > 0) {
             nudge.classList.add('active');
             desktop.classList.add('has-nudge');
+            if (ss) ss.classList.add('has-nudge');
             const escalated = data.active_demands.filter(d => d.priority >= 0.8).length;
             document.getElementById('evo-nudge-text').textContent =
                 demands + ' evolution demand' + (demands !== 1 ? 's' : '') +
@@ -5872,6 +5893,7 @@ async function updateNudgeBanner() {
         } else {
             nudge.classList.remove('active');
             desktop.classList.remove('has-nudge');
+            if (ss) ss.classList.remove('has-nudge');
         }
     } catch(e) {}
 }
@@ -5879,8 +5901,23 @@ async function updateNudgeBanner() {
 /* ═══════════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════════ */
-// Wizard runs in isolated async context so other boot errors can't kill it
-(async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();
+// ── Spectator mode: hide command bar, show banner, skip wizard ──
+if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+    // Hide command bar
+    const cmdBar = document.getElementById('command-bar');
+    if (cmdBar) cmdBar.style.display = 'none';
+    // Add spectator banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,rgba(139,92,246,0.15),rgba(59,130,246,0.15));border-bottom:1px solid rgba(139,92,246,0.3);padding:6px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.8);backdrop-filter:blur(10px)';
+    banner.innerHTML = '&#x1F50D; You\\\'re watching <strong>OpenSculpt</strong> — a self-evolving agentic OS running autonomously &middot; <a href="https://github.com/opensculpt/opensculpt" target="_blank" style="color:var(--purple);text-decoration:none">GitHub</a>';
+    document.body.prepend(banner);
+    // Shift topbar down
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.style.top = '29px';
+} else {
+    // Only run wizard if NOT in spectator mode
+    (async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();
+}
 refreshDesktop();
 updateNudgeBanner();
 setInterval(updateNudgeBanner, 30000);

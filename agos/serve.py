@@ -468,6 +468,13 @@ async def main() -> None:
         service_keeper=service_keeper,
     )
 
+    # Scenario auto-runner (spectator mode only)
+    if settings.spectator_mode:
+        from agos.daemons.scenario_runner import ScenarioRunner
+        scenario_runner = ScenarioRunner(os_agent=os_agent)
+        asyncio.create_task(scenario_runner.start())
+        _logger.info("ScenarioRunner started (spectator mode)")
+
     # Reality check loop: verify tracked resources are actually alive
     async def _reality_check_loop():
         await asyncio.sleep(30)
