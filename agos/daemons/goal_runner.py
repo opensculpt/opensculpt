@@ -579,7 +579,9 @@ Return JSON only:
             # ── SERVICE CARD EXTRACTION ──
             # If this phase deployed a persistent service, extract a service card
             # so ServiceKeeper can monitor, debug, and restore it.
-            if phase_ok and (current.get("creates_daemon") or current.get("creates_hand")):
+            # Note: extract even when phase_ok is False — the service may be running
+            # despite a flaky verify command (e.g. pgrep/ps not found in container).
+            if current.get("creates_daemon") or current.get("creates_hand"):
                 try:
                     from agos.services import extract_service_card, run_health_check, find_pid_on_port
                     card = await extract_service_card(self._os_agent._llm, goal, current)
@@ -595,7 +597,7 @@ Return JSON only:
                         _logger.info("Service card extracted + adopted: %s (port %d, status=%s)",
                                     card.name, card.port, card.status)
                 except Exception as e:
-                    _logger.debug("Service card extraction failed: %s", e)
+                    _logger.warning("Service card extraction failed for '%s': %s", current.get("name", "?"), e)
 
             # ── SMART RETRY: Diagnose WHY it failed before retrying ──
             retries = current.get("retries", 0)

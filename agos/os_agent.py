@@ -32,77 +32,20 @@ from agos.policy.audit import AuditTrail, AuditEntry  # noqa: E402
 from agos.guard import LoopGuard, CapabilityGate  # noqa: E402
 from agos.session import SessionCompactor  # noqa: E402
 from agos.knowledge.working import WorkingMemory  # noqa: E402
-
-MAX_TURNS = 40
-MAX_TOKENS = 200_000
-
-# ── Prompt Cache Boundary (Claude Code pattern) ──────────────────
-# Split system prompt into STATIC prefix (cacheable, identical across turns)
-# and DYNAMIC suffix (changes per turn: live state, memory, rules).
-# Anthropic prompt caching gives 90% savings on the static prefix.
-# The boundary marker tells the LLM provider where to set cache_control.
-
-CACHE_BOUNDARY = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"
-
-SYSTEM_PROMPT_STATIC = """\
-You are OpenSculpt, an agentic operating system.
-
-HOW YOU WORK:
-- EVERY task uses set_goal. Even simple ones like "deploy Redis" become a goal with phases.
-  This ensures every resource is tracked, every action is verified, and everything can be undone.
-- check_goals FIRST. If a goal exists for this task, report its status. Don't duplicate.
-- The GoalRunner executes ONE phase at a time via a sub-agent. Sequential. No parallelism.
-- You ONLY answer questions directly. Everything else → set_goal.
-
-TOOLS:
-- set_goal: YOUR ONLY TOOL for doing work. Creates a tracked, sequential plan.
-- check_goals: Check status of all goals and their phases.
-
-For questions/lookups ONLY (no side effects):
-- shell / http / docker_ps / docker_logs / browse: Read-only checks.
-
-NEVER use spawn_agent directly. ALL work goes through set_goal.
-
-RULES:
-1. EVERY action that creates, modifies, or deploys anything → set_goal. No exceptions.
-2. check_goals first. Don't duplicate goals.
-3. Use sensible TECHNICAL defaults (which database, port, framework). Don't ask about these.
-4. BUT ask the user for BUSINESS context they would know:
-   - Company/project name (for branding, templates)
-   - Categories/stages they need (ticket types, sales pipeline stages)
-   - Existing data to import (CSV, database, other system)
-   Ask these in your FIRST response, then start the goal immediately with defaults.
-   The user can answer while infrastructure deploys.
-5. When a phase FAILS: tell the user what went wrong and what they can do to help.
-6. When all phases COMPLETE: tell the user WHERE the result is (URL, port),
-   HOW to use it (sample commands, login credentials), and WHAT to do next.
-7. Be concise. Status table for goals. 1-2 sentences for questions."""
-
-# Dynamic suffix — rebuilt per turn (live state, knowledge, evolved rules)
-SYSTEM_PROMPT_DYNAMIC = """
-
-LIVE OS STATE:
-{context}"""
-
-# Combined for backward compat
-SYSTEM_PROMPT = SYSTEM_PROMPT_STATIC + SYSTEM_PROMPT_DYNAMIC
-
-# ── Tier-adaptive prompts for weak models ──────────────────
-
-SYSTEM_PROMPT_BASIC = """\
-You are OpenSculpt. You help users by creating goals.
-- Use set_goal to start any task. Provide a goal and a list of steps.
-- Use check_goals to see progress.
-- Use shell to run commands.
-Be concise. One goal at a time."""
-
-SYSTEM_PROMPT_CHAT_ONLY = """\
-You are OpenSculpt, an AI assistant. Answer questions helpfully.
-You cannot execute tasks or run commands in this mode.
-If the user asks you to do something, explain what steps they could take manually."""
-
-# Core tools for basic_tools tier (only these 3 tool names are sent)
-BASIC_TOOLS_WHITELIST = {"set_goal", "check_goals", "shell"}
+from agos.os_agent_tools import (  # noqa: E402
+    ToolManager,
+    shell as _shell, read_file as _read_file, write_file as _write_file,
+    http as _http, python as _python,
+    make_list_agents as _make_list_agents, make_manage_agent as _make_manage_agent,
+    sanitize_response as _sanitize_response, reply as _reply, trunc_args as _trunc_args,
+)
+from agos.os_agent_subagent import SubAgentRunner  # noqa: E402
+from agos.os_agent_context import (  # noqa: E402
+    MAX_TURNS, MAX_TOKENS, CACHE_BOUNDARY,
+    SYSTEM_PROMPT_STATIC, SYSTEM_PROMPT_DYNAMIC, SYSTEM_PROMPT,
+    SYSTEM_PROMPT_BASIC, SYSTEM_PROMPT_CHAT_ONLY, BASIC_TOOLS_WHITELIST,
+    ContextBuilder, CostTracker, LLMLoader,
+)
 
 
 class OSAgent:
@@ -126,9 +69,16 @@ class OSAgent:
         self._policy = policy_engine
         self._llm = llm
         self._approval = approval_gate
-        self._inner_registry = ToolRegistry()
+        # Tool management (brain/body separation — ToolManager is the "body")
+        self._tool_manager = ToolManager(event_bus, agent_registry)
+        self._tool_manager.register_base_tools()
+        self._tool_manager.subscribe_evolution_events()
+        self._inner_registry = self._tool_manager.registry  # backward compat
+        # Sub-agent management (extracted spawn/wait/check lifecycle)
+        self._subagent_runner = SubAgentRunner(event_bus, audit_trail, agent_registry)
+        self._subagent_runner._run_impl = self._run_sub_agent  # wire the LLM loop
+        self._sub_agents = self._subagent_runner._sub_agents  # shared dict
         self._start_time = time.time()
-        self._sub_agents: dict[str, dict] = {}
         self._daemon_manager: Any = None
         self._cheap_llm: BaseLLMProvider | None = None
         self._loom: Any = None  # Knowledge system (TheLoom)
@@ -151,14 +101,18 @@ class OSAgent:
         # Response cache - skip LLM for identical repeated queries
         self._response_cache: dict[str, str] = {}
         self._max_cache = 100
-        # Session token tracking
+        # Cost tracking (extracted to CostTracker)
+        self._cost_tracker = CostTracker()
+        # Backward compat — delegate to cost tracker
         self._session_tokens = 0
         self._session_input_tokens = 0
         self._session_output_tokens = 0
         self._session_requests = 0
         self._session_cost_usd = 0.0
-        self._lifetime_cost = self._load_lifetime_cost()
-        self._register_tools()
+        self._lifetime_cost = self._cost_tracker.lifetime_cost
+        # Context builder (extracted — assembles OS state for LLM)
+        self._context_builder = ContextBuilder()
+        self._context_builder._start_time = self._start_time
 
         # Wrap with sandbox if configured
         if sandbox_config is not None:
@@ -297,155 +251,26 @@ class OSAgent:
         ), self._daemon_results)
 
     async def _try_auto_load_llm(self) -> None:
-        """Auto-load LLM from setup.json.
-
-        Uses whichever provider the user explicitly enabled in the Settings tab.
-        The 'active_provider' key (if set) takes priority. Otherwise tries
-        all enabled providers in the order they appear.
-        """
-        import os as _os
-        try:
-            from agos.setup_store import load_setup
-            from agos.llm.providers import ALL_PROVIDERS
-
-            for ws in [_os.path.join(_os.getcwd(), ".opensculpt"), _os.path.join(_os.path.expanduser("~"), ".opensculpt"),
-                       _os.path.join(_os.getcwd(), ".agos"), _os.path.join(_os.path.expanduser("~"), ".agos")]:
-                if not _os.path.isdir(ws):
-                    continue
-                data = load_setup(ws)
-                providers = data.get("providers", {})
-
-                # If user explicitly set a provider via Settings tab, use that first
-                active = data.get("active_provider", "")
-                if active and active in providers:
-                    cfg = providers[active]
-                    if self._load_provider(active, cfg, ALL_PROVIDERS):
-                        return
-
-                # Otherwise try all enabled providers
-                for name, cfg in providers.items():
-                    if not cfg.get("enabled", False):
-                        continue
-                    if self._load_provider(name, cfg, ALL_PROVIDERS):
-                        return
-        except Exception:
-            pass
-
-    def _load_provider(self, name: str, cfg: dict, all_providers: dict) -> bool:
-        """Try to load a single LLM provider. Returns True on success."""
-        # Anthropic shortcut - needs special provider class
-        if name == "anthropic" and cfg.get("api_key"):
-            from agos.llm.anthropic import AnthropicProvider
-            try:
-                self._llm = AnthropicProvider(
-                    api_key=cfg["api_key"],
-                    model=cfg.get("model", "claude-haiku-4-5-20251001"),
-                )
-                return True
-            except Exception:
-                return False
-        cls = all_providers.get(name)
-        if not cls:
-            return False
-        kwargs = {k: v for k, v in cfg.items() if k != "enabled"}
-        try:
-            self._llm = cls(**kwargs)
-            return True
-        except Exception:
-            return False
+        """Auto-load LLM from setup.json (delegated to LLMLoader)."""
+        llm = LLMLoader.auto_load()
+        if llm:
+            self._llm = llm
 
     def _build_os_context(self) -> str:
         """Gather live OS state so the LLM can reason about OpenSculpt."""
-        import os as _os
-        parts = []
-        uptime = int(time.time() - self._start_time)
-        parts.append(f"UPTIME: {uptime}s")
-
-        # Core services
-        services = ["EventBus: online", "AuditTrail: online", "PolicyEngine: online"]
-        services.append(f"LLM: {'connected' if self._llm else 'not configured'}")
-        parts.append("SERVICES:\n" + "\n".join(f"  [+] {s}" for s in services))
-
-        # Agents
-        if self._registry:
-            agents = self._registry.list_agents()
-            if agents:
-                lines = [f"  {a['name']} [{a.get('runtime','?')}] - {a.get('status','idle')}" for a in agents]
-                parts.append(f"INSTALLED AGENTS ({len(agents)}):\n" + "\n".join(lines))
-            else:
-                parts.append("INSTALLED AGENTS: none yet (agents are like apps - install to extend OpenSculpt)")
-
-        # Daemons
-        hm = getattr(self, "_daemon_manager", None)
-        if hm:
-            daemons = hm.list_daemons()
-            lines = []
-            for h in daemons:
-                status = "RUNNING" if h["status"] == "running" else h["status"]
-                line = f"  {h['icon']} {h['name']}: {h['description']} [{status}]"
-                if h["status"] == "running":
-                    line += f" (ticks: {h['ticks']})"
-                if h.get("last_result"):
-                    line += f"\n    Last: {h['last_result'].get('summary','')[:100]}"
-                lines.append(line)
-            running = sum(1 for h in daemons if h["status"] == "running")
-            parts.append(f"HANDS ({len(daemons)} registered, {running} active):\n" + "\n".join(lines))
-            parts.append("  Daemons are autonomous background tasks. Start with: 'start researcher with topic ...'")
-
-        # Tools (just count - full schemas are in the tools param already)
-        tools = self._inner_registry.list_tools()
-        if tools:
-            parts.append(f"TOOLS: {len(tools)} available (shell, files, HTTP, python, git, etc.)")
-
-        # Evolution
-        from agos.config import settings as _cfg
-        evolved_dir = _os.path.join(str(_cfg.workspace_dir), "evolved")
-        if _os.path.isdir(evolved_dir):
-            files = [f for f in _os.listdir(evolved_dir) if f.endswith(".py")]
-            if files:
-                evo_lines = []
-                for f in files[:10]:
-                    fpath = _os.path.join(evolved_dir, f)
-                    desc = ""
-                    try:
-                        with open(fpath, encoding="utf-8") as fh:
-                            for line in fh:
-                                line = line.strip()
-                                if line.startswith("# Pattern:") or line.startswith("# Description:"):
-                                    desc = line.split(":", 1)[1].strip()
-                                    break
-                                if line.startswith("# Module:"):
-                                    desc = "targets " + line.split(":", 1)[1].strip()
-                    except Exception:
-                        pass
-                    evo_lines.append(f"  - {f}" + (f" ({desc})" if desc else ""))
-                parts.append(
-                    f"EVOLUTION ENGINE: active, {len(files)} evolved strategies in {evolved_dir}/\n"
-                    + "\n".join(evo_lines) + "\n"
-                    "  Pipeline: arxiv scan -> paper analysis -> code generation -> sandbox test -> integrate\n"
-                    "  Evolved code modifies live OS: knowledge retrieval, policy, intent understanding.\n"
-                    "  Each strategy is sandbox-tested before being loaded into the running OS."
-                )
-            else:
-                parts.append("EVOLUTION ENGINE: active, no evolved strategies yet")
-        else:
-            parts.append("EVOLUTION ENGINE: active, no evolved strategies yet")
-
-        if self._sub_agents:
-            lines = [f"  {k}: {v['status']}" for k, v in self._sub_agents.items()]
-            parts.append("RUNNING SUB-AGENTS:\n" + "\n".join(lines))
-
-        # Knowledge summary
-        if self._loom:
-            parts.append("KNOWLEDGE: TheLoom active (episodic + semantic + graph memory)")
-
-        # Constraints are injected per-command in execute(), not here in the static prompt
-
-        # Session stats
-        compact_info = f", {self._compactor.stats['compactions']} compactions" if self._compactor.stats['compactions'] else ""
-        parts.append(f"SESSION: {self._session_requests} requests, {self._session_tokens:,} tokens used, {len(self._conversation_history)} in memory{compact_info}")
-
-        return "\n\n".join(parts)
+        # Sync mutable refs into the context builder
+        cb = self._context_builder
+        cb._registry = self._registry
+        cb._daemon_manager = self._daemon_manager
+        cb._inner_registry = self._inner_registry
+        cb._loom = self._loom
+        cb._llm = self._llm
+        cb._compactor = self._compactor
+        cb._sub_agents = self._sub_agents
+        cb._session_requests = self._session_requests
+        cb._session_tokens = self._session_tokens
+        cb._conversation_history = self._conversation_history
+        return cb.build()
 
     async def execute(self, command: str) -> dict[str, Any]:
         """Execute ANY natural language command."""
@@ -1062,68 +887,24 @@ class OSAgent:
             }, source="os_agent")
             return _reply(False, "error", f"Failed: {e}")
 
-    # ── Cost tracking ────────────────────────────────────────────
-
-    # Per-million-token pricing (USD). Input / Output.
-    _MODEL_PRICING = {
-        # Anthropic
-        "claude-haiku-4-5-20251001": (1.00, 5.00),
-        "claude-sonnet-4-20250514": (3.00, 15.00),
-        "claude-opus-4-20250514": (15.00, 75.00),
-        # OpenRouter Anthropic
-        "anthropic/claude-haiku-4-5": (0.80, 4.00),
-        "anthropic/claude-sonnet-4": (3.00, 15.00),
-        "anthropic/claude-opus-4": (15.00, 75.00),
-        # OpenAI
-        "gpt-4o": (2.50, 10.00),
-        "gpt-4o-mini": (0.15, 0.60),
-        "gpt-4.1": (2.00, 8.00),
-        "gpt-4.1-mini": (0.40, 1.60),
-        # Groq
-        "llama-3.3-70b-versatile": (0.59, 0.79),
-        # DeepSeek
-        "deepseek-chat": (0.27, 1.10),
-        # Google
-        "gemini-2.5-flash": (0.15, 0.60),
-        "gemini-2.5-pro": (1.25, 10.00),
-        # Fallback
-        "_default": (1.00, 5.00),
-    }
+    # ── Cost tracking (delegated to CostTracker in os_agent_context.py) ──
 
     def _calc_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """Calculate USD cost from actual token counts."""
         model = getattr(self._llm, 'model', '') if self._llm else ''
-        pricing = self._MODEL_PRICING.get(model, self._MODEL_PRICING["_default"])
-        input_cost = (input_tokens / 1_000_000) * pricing[0]
-        output_cost = (output_tokens / 1_000_000) * pricing[1]
-        return input_cost + output_cost
+        return self._cost_tracker.calc_cost(input_tokens, output_tokens, model)
 
     def _load_lifetime_cost(self) -> dict:
-        """Load accumulated cost from .opensculpt/cost.json."""
-        import json
-        from pathlib import Path
-        cost_path = Path(".opensculpt/cost.json")
-        if cost_path.exists():
-            try:
-                return json.loads(cost_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return {"total_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
+        return self._cost_tracker.load()
 
     def _save_lifetime_cost(self) -> None:
-        """Persist accumulated cost to disk — survives restart."""
-        import json
-        from pathlib import Path
-        cost_path = Path(".opensculpt/cost.json")
-        cost_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lifetime_cost["total_usd"] += self._session_cost_usd
-        self._lifetime_cost["input_tokens"] += self._session_input_tokens
-        self._lifetime_cost["output_tokens"] += self._session_output_tokens
-        self._lifetime_cost["requests"] += self._session_requests
-        cost_path.write_text(json.dumps(self._lifetime_cost, indent=2), encoding="utf-8")
+        # Sync session state into cost tracker before saving
+        self._cost_tracker.session_cost_usd = self._session_cost_usd
+        self._cost_tracker.session_input_tokens = self._session_input_tokens
+        self._cost_tracker.session_output_tokens = self._session_output_tokens
+        self._cost_tracker.session_requests = self._session_requests
+        self._cost_tracker.save()
 
     def _track_usage(self, input_tokens: int, output_tokens: int) -> None:
-        """Track token usage and cost for a single LLM call."""
         cost = self._calc_cost(input_tokens, output_tokens)
         self._session_input_tokens += input_tokens
         self._session_output_tokens += output_tokens
@@ -1132,279 +913,14 @@ class OSAgent:
 
     # ── Tool registration ────────────────────────────────────────
 
-    def _register_tools(self) -> None:
-        T, P = ToolSchema, ToolParameter
-        reg = self._inner_registry
-
-        reg.register(T(
-            name="shell",
-            description="Run any shell command. You have root. Use for: apt-get, pip, npm, git, ls, ps, curl, make, gcc, etc.",
-            parameters=[
-                P(name="command", description="Shell command to execute"),
-                P(name="timeout", type="integer", description="Timeout seconds (default 60)", required=False),
-            ],
-        ), _shell)
-
-        reg.register(T(
-            name="read_file",
-            description="Read a file or list a directory.",
-            parameters=[P(name="path", description="File or directory path")],
-        ), _read_file)
-
-        reg.register(T(
-            name="write_file",
-            description="Write content to a file. Creates parent dirs.",
-            parameters=[
-                P(name="path", description="File path"),
-                P(name="content", description="Content to write"),
-            ],
-        ), _write_file)
-
-        reg.register(T(
-            name="http",
-            description="HTTP request. Use for APIs, web scraping, downloads.",
-            parameters=[
-                P(name="url", description="URL"),
-                P(name="method", description="GET/POST/PUT/DELETE", required=False),
-                P(name="body", description="Request body", required=False),
-                P(name="headers", description="JSON headers string", required=False),
-            ],
-        ), _http)
-
-        reg.register(T(
-            name="python",
-            description="Run Python code. Use print() for output.",
-            parameters=[P(name="code", description="Python code")],
-        ), _python)
-
-        # Think tool (OpenHands pattern) — agent reasons without executing.
-        # Counts as progress for loop detection. Prevents "agent stuck because
-        # it needs to plan but loop detector sees no action."
-        async def _think(thought: str) -> str:
-            return f"[Thought recorded: {thought[:200]}]"
-
-        reg.register(T(
-            name="think",
-            description="Reason about your approach WITHOUT executing anything. Use this to plan multi-step work, debug why something failed, or decide between approaches. Counts as progress.",
-            parameters=[P(name="thought", description="Your reasoning or plan")],
-        ), _think)
-
-        # NOTE: spawn_agent and check_agent are NOT registered as tools.
-        # All work goes through set_goal → GoalRunner → sub-agents.
-        # The OS agent must NOT bypass GoalRunner by spawning agents directly.
-        # Internal methods _spawn_agent/_spawn_agent_and_wait still exist
-        # for GoalRunner to use.
-
-        # Agent management if registry available
-        if self._registry:
-            agent_reg = self._registry
-            reg.register(T(
-                name="list_agents",
-                description="List installed agents on this system.",
-                parameters=[],
-            ), _make_list_agents(agent_reg))
-
-            reg.register(T(
-                name="manage_agent",
-                description="Manage installed agents: setup/start/stop/restart/uninstall/status.",
-                parameters=[
-                    P(name="action", description="setup|start|stop|restart|uninstall|status"),
-                    P(name="name", description="Agent name"),
-                    P(name="github_url", description="GitHub URL (for setup)", required=False),
-                ],
-            ), _make_manage_agent(agent_reg))
-
-        # ── Docker + Browser tools - NOT registered at boot ──
-        # These are activated by evolution when demand signals detect capability gaps.
-        # The OS agent starts with shell/http only. When it uses shell("docker ..."),
-        # the demand collector fires os.capability_gap → evolution activates these.
-        # This makes evolution REAL - the OS grows tools organically.
-        self._dormant_tools: dict[str, bool] = {"docker": False, "browser": False}
-
-        # Listen for evolution events to register tools on demand
-        if hasattr(self, '_bus'):
-            self._bus.subscribe("evolution.builtin_activated", self._on_tool_activated)
-            self._bus.subscribe("evolution.tool_deployed", self._on_evolved_tool_deployed)
-
-    async def _on_tool_activated(self, event) -> None:
-        """Evolution activated a builtin tool - register it now."""
-        module = event.data.get("module", "")
-        _tool = event.data.get("tool", "")
-        if "docker" in module and not self._dormant_tools.get("docker"):
-            self._register_docker_tools()
-            self._dormant_tools["docker"] = True
-            _logger.info("Evolution activated docker tools")
-        if "browser" in module and not self._dormant_tools.get("browser"):
-            self._register_browser_tools()
-            self._dormant_tools["browser"] = True
-            _logger.info("Evolution activated browser tools")
-
-    async def _on_evolved_tool_deployed(self, event) -> None:
-        """Evolution deployed a new tool — register it for agent use."""
-        tool_name = event.data.get("tool", "")
-        if not tool_name or self._inner_registry.get_tool(tool_name):
-            return
-        from agos.config import settings as _settings_tool
-        tool_file = _settings_tool.workspace_dir / "evolved" / "tools" / f"{tool_name}.py"
-        if not tool_file.exists():
-            return
-        try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location(f"evolved_{tool_name}", tool_file)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            handler = getattr(module, "handler", None)
-            if not handler:
-                return
-            from agos.tools.schema import ToolSchema, ToolParameter
-            params_raw = getattr(module, "TOOL_PARAMETERS", [])
-            parameters = [
-                ToolParameter(name=p["name"], type=p.get("type", "string"),
-                             description=p.get("description", ""), required=p.get("required", True))
-                for p in params_raw if isinstance(p, dict)
-            ]
-            schema = ToolSchema(
-                name=getattr(module, "TOOL_NAME", tool_name),
-                description=getattr(module, "TOOL_DESCRIPTION", event.data.get("description", "Evolved tool")),
-                parameters=parameters,
-            )
-            self._inner_registry.register(schema, handler)
-            _logger.info("Registered evolved tool: %s", tool_name)
-        except Exception as e:
-            _logger.warning("Failed to load evolved tool %s: %s", tool_name, e)
+    # Tool registration, evolution hooks, and docker/browser packs are in
+    # agos/os_agent_tools.py (ToolManager class). Wired up in __init__.
 
     def activate_tool_pack(self, pack: str) -> bool:
         """Manually activate a tool pack (for testing or first-run setup)."""
-        if pack == "docker" and not self._dormant_tools.get("docker"):
-            self._register_docker_tools()
-            self._dormant_tools["docker"] = True
-            return True
-        if pack == "browser" and not self._dormant_tools.get("browser"):
-            self._register_browser_tools()
-            self._dormant_tools["browser"] = True
-            return True
-        return False
+        return self._tool_manager.activate_pack(pack)
 
-    def _register_docker_tools(self) -> None:
-        """Register Docker tools - called when evolution activates them."""
-        T, P = ToolSchema, ToolParameter
-        reg = self._inner_registry
-        from agos.tools.docker_tool import (
-            docker_run, docker_ps, docker_stop, docker_rm,
-            docker_logs, docker_pull, docker_network, docker_exec,
-        )
-        _docker_kw = ["docker", "container", "deploy", "postgres", "mysql", "redis", "nginx", "install", "crm", "database"]
-        reg.register(T(
-            name="docker_run",
-            description="Run a Docker container. Use for installing software (CRM, databases, etc).",
-            parameters=[
-                P(name="image", description="Docker image (e.g. 'espocrm/espocrm:latest')"),
-                P(name="name", description="Container name", required=False),
-                P(name="ports", description="Port mapping (e.g. '8081:80')", required=False),
-                P(name="env", description="Env vars as JSON: {\"KEY\": \"value\"}", required=False),
-                P(name="network", description="Docker network name", required=False),
-                P(name="extra", description="Additional docker flags", required=False),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_run)
-        reg.register(T(
-            name="docker_ps",
-            description="List running Docker containers.",
-            parameters=[
-                P(name="all_containers", type="boolean", description="Show all (including stopped)", required=False),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_ps)
-        reg.register(T(
-            name="docker_stop",
-            description="Stop a Docker container.",
-            parameters=[P(name="name", description="Container name or ID")],
-            deferred=True, keywords=_docker_kw,
-        ), docker_stop)
-        reg.register(T(
-            name="docker_rm",
-            description="Remove a Docker container.",
-            parameters=[
-                P(name="name", description="Container name or ID"),
-                P(name="force", type="boolean", description="Force remove", required=False),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_rm)
-        reg.register(T(
-            name="docker_logs",
-            description="Get logs from a Docker container.",
-            parameters=[
-                P(name="name", description="Container name"),
-                P(name="tail", type="integer", description="Number of lines (default 50)", required=False),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_logs)
-        reg.register(T(
-            name="docker_pull",
-            description="Pull a Docker image.",
-            parameters=[P(name="image", description="Image to pull (e.g. 'mysql:8.0')")],
-            deferred=True, keywords=_docker_kw,
-        ), docker_pull)
-        reg.register(T(
-            name="docker_network",
-            description="Manage Docker networks (create, rm, ls).",
-            parameters=[
-                P(name="action", description="create, rm, or ls"),
-                P(name="name", description="Network name"),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_network)
-        reg.register(T(
-            name="docker_exec",
-            description="Run a command inside a Docker container.",
-            parameters=[
-                P(name="container", description="Container name"),
-                P(name="command", description="Command to run"),
-            ],
-            deferred=True, keywords=_docker_kw,
-        ), docker_exec)
-
-    def _register_browser_tools(self) -> None:
-        """Register Browser tools - called when evolution activates them."""
-        T, P = ToolSchema, ToolParameter
-        reg = self._inner_registry
-        from agos.tools.browser_tool import (
-            browse, browser_fill, browser_click, browser_screenshot, browser_content,
-        )
-        _browser_kw = ["browse", "scrape", "website", "navigate", "click", "screenshot", "browser", "page", "form", "login", "dashboard", "ui"]
-        reg.register(T(
-            name="browse",
-            description="Open a URL in a headless browser and return the page text. Use for web UIs, CRM dashboards, setup wizards.",
-            parameters=[P(name="url", description="URL to navigate to")],
-            deferred=True, keywords=_browser_kw,
-        ), browse)
-        reg.register(T(
-            name="browser_fill",
-            description="Fill a form field on the current page.",
-            parameters=[
-                P(name="selector", description="CSS selector (e.g. '#username', 'input[name=email]')"),
-                P(name="value", description="Text to type"),
-            ],
-            deferred=True, keywords=_browser_kw,
-        ), browser_fill)
-        reg.register(T(
-            name="browser_click",
-            description="Click a button or link on the current page.",
-            parameters=[P(name="selector", description="CSS selector or text selector (e.g. 'text=Sign In')")],
-            deferred=True, keywords=_browser_kw,
-        ), browser_click)
-        reg.register(T(
-            name="browser_screenshot",
-            description="Take a screenshot of the current browser page.",
-            parameters=[P(name="path", description="File path to save screenshot", required=False)],
-            deferred=True, keywords=_browser_kw,
-        ), browser_screenshot)
-        reg.register(T(
-            name="browser_content",
-            description="Get text content of a page element.",
-            parameters=[P(name="selector", description="CSS selector (default 'body')", required=False)],
-            deferred=True, keywords=_browser_kw,
-        ), browser_content)
+    # Docker and browser tool packs are in agos/os_agent_tools.py (ToolManager).
 
     async def _set_goal(self, goal: str, category: str = "") -> str:
         """Set a persistent high-level goal for autonomous execution."""
@@ -1489,99 +1005,34 @@ class OSAgent:
             lines.append(f"- {summary}")
         return f"Recent results from '{name}':\n" + "\n".join(lines)
 
-    # ── Sub-agent spawning ───────────────────────────────────────
+    # ── Sub-agent spawning (delegated to SubAgentRunner) ──────────
 
     def _select_design_pattern(self, task: str) -> tuple[str, str]:
-        """Select the best agentic design pattern(s) for a task.
-
-        Uses the PatternRegistry (evolvable, fitness-weighted) if available,
-        falls back to simple keyword matching otherwise.
-
-        Returns (pattern_names_csv, combined_instructions).
-        """
-        # Use the evolvable PatternRegistry if available
-        if self._pattern_registry:
-            selected = self._pattern_registry.select_for_task(task, count=2)
-            if selected:
-                names = ", ".join(p.name for p in selected)
-                instructions = "\n\n".join(p.instructions for p in selected)
-                return names, instructions
-
-        # Fallback: simple keyword matching (generation 0)
-        task_lower = task.lower()
-        if any(w in task_lower for w in ["review", "analyze", "audit", "evaluate"]):
-            return "reflection", "PATTERN: Reflection - draft, self-critique, revise. Minimum 2 passes."
-        if any(w in task_lower for w in ["install", "set up", "deploy", "configure"]):
-            return "planning", "PATTERN: Planning - plan steps, execute in order, verify each step."
-        if any(w in task_lower for w in ["monitor", "watch", "alert", "track"]):
-            return "goal_monitoring", "PATTERN: Goal Monitoring - define success, track progress, alert on deviation."
-        return "tool_use", "PATTERN: Tool Use - use tools aggressively, verify results."
+        """Select the best agentic design pattern(s) for a task."""
+        return self._subagent_runner.select_design_pattern(task)
 
     async def _spawn_agent(self, name: str, task: str, persona: str = "",
                             goal_id: str = "") -> str:
         """Spawn a sub-agent that works on a task independently."""
-        if not self._llm:
-            return "Error: No LLM available"
-
-        # Select the best design pattern for this task
-        pattern_name, pattern_instructions = self._select_design_pattern(task)
-
-        agent_id = f"sub_{name}_{int(time.time()) % 10000}"
-        self._sub_agents[name] = {
-            "id": agent_id, "task": task, "status": "running",
-            "result": None, "pattern": pattern_name, "goal_id": goal_id,
-        }
-
-        await self._bus.emit("os.sub_agent.spawned", {
-            "name": name, "task": task[:200], "agent_id": agent_id,
-        }, source="os_agent")
-
-        # Register with AgentRegistry so it appears in the Agents tab
-        if self._registry:
-            try:
-                self._registry.register_live_agent(agent_id, name, task, source="os_agent")
-            except Exception:
-                pass
-
-        await self._bus.emit("agent.spawned", {
-            "id": agent_id, "agent": name,
-            "role": persona or task[:60],
-        }, source="os_agent")
-        await self._audit.record(AuditEntry(
-            agent_id=agent_id, agent_name=name,
-            action="state_change", detail="created -> running",
-            success=True,
-        ))
-
-        # Run in background with selected design pattern
-        asyncio.create_task(self._run_sub_agent(name, task, persona, pattern_instructions))
-        return f"Sub-agent '{name}' spawned (pattern: {pattern_name}) working on: {task[:100]}"
+        self._subagent_runner.set_refs(llm=self._llm, tools=self._tools,
+                                        approval=self._approval, loom=self._loom,
+                                        pattern_registry=self._pattern_registry,
+                                        resource_registry=self._resource_registry,
+                                        capability_gate=self._capability_gate,
+                                        cheap_llm=self._cheap_llm)
+        return await self._subagent_runner.spawn(name, task, persona, goal_id=goal_id)
 
     async def _spawn_agent_and_wait(self, name: str, task: str,
                                      persona: str = "", timeout: int = 300,
                                      goal_id: str = "") -> dict:
-        """Spawn ONE sub-agent and WAIT for it to complete.
-
-        Unlike _spawn_agent (fire-and-forget), this blocks until the agent
-        finishes. Used by GoalRunner to enforce sequential phase execution -
-        only one agent runs at a time.
-        """
-        await self._spawn_agent(name, task, persona, goal_id=goal_id)
-
-        start = time.time()
-        while time.time() - start < timeout:
-            agent = self._sub_agents.get(name, {})
-            status = agent.get("status", "")
-            if status in ("done", "error"):
-                return {
-                    "ok": status == "done",
-                    "message": agent.get("result", "") or "",
-                    "data": agent.get("data", {}),
-                }
-            await asyncio.sleep(3)
-
-        # Timeout - agent took too long
-        return {"ok": False, "message": f"Agent '{name}' timed out after {timeout}s"}
+        """Spawn ONE sub-agent and WAIT for it to complete."""
+        self._subagent_runner.set_refs(llm=self._llm, tools=self._tools,
+                                        approval=self._approval, loom=self._loom,
+                                        pattern_registry=self._pattern_registry,
+                                        resource_registry=self._resource_registry,
+                                        capability_gate=self._capability_gate,
+                                        cheap_llm=self._cheap_llm)
+        return await self._subagent_runner.spawn_and_wait(name, task, persona, timeout, goal_id)
 
     async def _run_sub_agent(self, name: str, task: str, persona: str,
                               pattern_instructions: str = "") -> None:
@@ -2148,175 +1599,11 @@ RULES:
 
     async def _check_agent(self, name: str) -> str:
         """Check a sub-agent's status."""
-        if name not in self._sub_agents:
-            return f"No sub-agent named '{name}'. Active: {list(self._sub_agents.keys())}"
-        agent = self._sub_agents[name]
-        if agent["status"] == "running":
-            return f"Sub-agent '{name}' is still working on: {agent['task'][:100]}"
-        result = agent.get("result", "(no result)")
-        return f"Sub-agent '{name}' finished ({agent['status']}).\n\nResult:\n{result}"
+        return await self._subagent_runner.check(name)
 
 
 # ── Standalone tool implementations ──────────────────────────────
 
 
-async def _shell(command: str, timeout: int = 60) -> str:
-    import subprocess as _sp
-    import os as _os
-    try:
-        cwd = "/app" if _os.path.isdir("/app") else _os.getcwd()
-        proc = await asyncio.create_subprocess_shell(
-            command, stdout=_sp.PIPE, stderr=_sp.PIPE, cwd=cwd,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        parts = [f"exit={proc.returncode}"]
-        if stdout:
-            parts.append(stdout.decode(errors="replace")[:6000])
-        if stderr:
-            parts.append(f"stderr: {stderr.decode(errors='replace')[:3000]}")
-        return "\n".join(parts)
-    except asyncio.TimeoutError:
-        return f"Timed out after {timeout}s"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-async def _read_file(path: str) -> str:
-    from pathlib import Path
-    p = Path(path)
-    if not p.exists():
-        return f"Not found: {path}"
-    if p.is_dir():
-        entries = sorted(p.iterdir())
-        lines = []
-        for e in entries[:100]:
-            kind = "DIR " if e.is_dir() else "FILE"
-            sz = e.stat().st_size if e.is_file() else 0
-            lines.append(f"  {kind} {e.name:40s} {sz:>10,}b")
-        return f"{path} ({len(entries)} entries)\n" + "\n".join(lines)
-    try:
-        c = p.read_text(encoding="utf-8", errors="replace")
-        if len(c) > 10000:
-            return c[:5000] + f"\n...[{len(c)} chars total]...\n" + c[-3000:]
-        return c
-    except Exception as e:
-        return f"Error: {e}"
-
-
-async def _write_file(path: str, content: str) -> str:
-    from pathlib import Path
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
-    return f"Wrote {len(content)} bytes to {path}"
-
-
-async def _http(url: str, method: str = "GET", body: str = "", headers: str = "") -> str:
-    import httpx
-    import json
-    try:
-        hdrs = json.loads(headers) if headers else {}
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-            r = await c.request(method, url, content=body or None, headers=hdrs)
-            return f"HTTP {r.status_code}\n{r.text[:8000]}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-async def _python(code: str) -> str:
-    import subprocess as _sp
-    import os as _os
-    import sys as _sys
-    try:
-        cwd = "/app" if _os.path.isdir("/app") else _os.getcwd()
-        python_cmd = _sys.executable or "python3"
-        proc = await asyncio.create_subprocess_exec(
-            python_cmd, "-c", code, stdout=_sp.PIPE, stderr=_sp.PIPE, cwd=cwd,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        out = ""
-        if stdout:
-            out += stdout.decode(errors="replace")[:6000]
-        if stderr:
-            out += f"\nstderr: {stderr.decode(errors='replace')[:3000]}"
-        return out or "(no output)"
-    except asyncio.TimeoutError:
-        return "Timed out after 60s"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def _make_list_agents(registry):
-    async def _fn() -> str:
-        agents = registry.list_agents()
-        if not agents:
-            return "No agents installed."
-        lines = [f"  {a['name']} [{a['runtime']}] {a['status']}" for a in agents]
-        return "\n".join(lines)
-    return _fn
-
-
-def _make_manage_agent(registry):
-    async def _fn(action: str, name: str, github_url: str = "") -> str:
-        try:
-            if action == "setup":
-                a = await registry.setup(name, github_url=github_url)
-                return f"Setup {a.display_name}: {a.status.value}"
-            agent = registry.get_agent_by_name(name)
-            if not agent:
-                return f"Agent '{name}' not found."
-            if action == "start":
-                a = await registry.start(agent.id)
-                return f"Started {a.display_name}: {a.status.value}"
-            elif action == "stop":
-                a = await registry.stop(agent.id)
-                return f"Stopped {a.display_name}."
-            elif action == "restart":
-                if agent.status.value == "running":
-                    await registry.stop(agent.id)
-                a = await registry.start(agent.id)
-                return f"Restarted {a.display_name}."
-            elif action == "uninstall":
-                await registry.uninstall(agent.id)
-                return f"Uninstalled {name}."
-            elif action == "status":
-                return f"{agent.display_name} [{agent.runtime}] {agent.status.value} mem={agent.memory_limit_mb}MB"
-            return f"Unknown action: {action}"
-        except Exception as e:
-            return f"Error: {e}"
-    return _fn
-
-
-# Patterns that should never appear in user-facing responses
-_DANGEROUS_PATTERNS = [
-    (r"(?i)DROP\s+TABLE\s+\w+", "[SQL_REDACTED]"),
-    (r"(?i)DELETE\s+FROM\s+\w+", "[SQL_REDACTED]"),
-    (r"(?i)INSERT\s+INTO\s+\w+", "[SQL_REDACTED]"),
-    (r"(?i)UPDATE\s+\w+\s+SET\s+", "[SQL_REDACTED]"),
-    (r"(?i);\s*--", "[SQL_REDACTED]"),
-    (r"(?i)xp_cmdshell", "[REDACTED]"),
-    (r"rm\s+-rf\s+/(?:\s|$)", "[REDACTED]"),
-    (r"(?i)password\s*[:=]\s*\S+", "password: [REDACTED]"),
-    (r"(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*\S+", r"\1: [REDACTED]"),
-]
-_DANGEROUS_RE = [(compile := _re.compile(p), r) for p, r in _DANGEROUS_PATTERNS]
-
-
-def _sanitize_response(text: str) -> str:
-    """Strip dangerous patterns from user-facing responses.
-
-    The OS agent should never echo SQL injection payloads, credentials,
-    or destructive commands back to the user — even when explaining
-    that they were handled safely.
-    """
-    for pattern, replacement in _DANGEROUS_RE:
-        text = pattern.sub(replacement, text)
-    return text
-
-
-def _reply(ok: bool, action: str, message: str, data: dict | None = None) -> dict:
-    return {"ok": ok, "action": action, "message": message, "data": data or {}}
-
-
-def _trunc_args(args: dict) -> dict:
-    return {k: (str(v)[:100] + "..." if len(str(v)) > 100 else str(v)) for k, v in args.items()}
+# Tool handler functions, factory closures, and response utilities are in
+# agos/os_agent_tools.py — imported at the top of this file.
