@@ -114,6 +114,16 @@ async def build_evolution_provider(settings) -> BaseLLMProvider:
         logger.info("Evolution LLM: Ollama (%s/%s)", settings.ollama_base_url, settings.ollama_model)
         return provider
 
+    if choice == "openrouter":
+        if settings.llm_api_key:
+            from agos.llm.providers import ALL_PROVIDERS
+            cls = ALL_PROVIDERS.get("openrouter")
+            if cls:
+                provider = cls(api_key=settings.llm_api_key, model=settings.default_model)
+                logger.info("Evolution LLM: OpenRouter (%s)", settings.default_model)
+                return provider
+        logger.warning("OpenRouter selected but no API key — falling back to auto")
+
     if choice == "anthropic":
         if settings.anthropic_api_key:
             from agos.llm.anthropic import AnthropicProvider
