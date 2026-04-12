@@ -531,10 +531,9 @@ TOOLS: shell, read_file, write_file, http, python
 
             # Use OS agent's sub-agent mechanism
             result = await self._os_agent._run_sub_agent(
+                name=f"debug_{card.name}",
                 task=prompt,
-                tools=["shell", "read_file", "write_file", "http", "python"],
-                category="debug",
-                goal_id=card.goal_id,
+                persona="You are a service debugger. Diagnose and fix the issue.",
             )
 
             # Check if service is now healthy

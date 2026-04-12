@@ -86,6 +86,25 @@ async def main() -> None:
 
     settings.workspace_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Seed setup.json from env vars if empty (spectator mode / fresh deploy) ──
+    from agos.setup_store import load_setup, save_setup
+    _setup = load_setup(settings.workspace_dir)
+    if not _setup.get("providers") and settings.llm_api_key:
+        provider_name = _detect_provider_from_key(settings.llm_api_key) or settings.evolution_llm_provider or "anthropic"
+        _model = settings.default_model
+        if "/" in _model:
+            _model = _model.split("/", 1)[1]
+        _setup["providers"] = {
+            provider_name: {
+                "enabled": True,
+                "api_key": settings.llm_api_key,
+                "model": _model,
+            }
+        }
+        _setup["active_provider"] = provider_name
+        save_setup(settings.workspace_dir, _setup)
+        _logger.info("Seeded setup.json with %s provider from env vars", provider_name)
+
     # ── P0: Auto-generate dashboard API key on first boot ──
     if not settings.dashboard_api_key:
         import secrets

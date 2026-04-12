@@ -5,17 +5,15 @@ services:
     ports:
       - "8420:8420"
     environment:
-      - SCULPT_LLM_API_KEY=${SCULPT_LLM_API_KEY:-lm-studio}
-      - SCULPT_DEFAULT_MODEL=${SCULPT_DEFAULT_MODEL:-gemma-4-e4b-it}
+      - SCULPT_LLM_API_KEY=${SCULPT_LLM_API_KEY:-}
+      - SCULPT_DEFAULT_MODEL=${SCULPT_DEFAULT_MODEL:-anthropic/claude-haiku-4-5}
       - SCULPT_GITHUB_TOKEN=${SCULPT_GITHUB_TOKEN:-}
       - SCULPT_AUTO_SHARE_EVERY=${SCULPT_AUTO_SHARE_EVERY:-0}
       - SCULPT_DASHBOARD_HOST=0.0.0.0
       - SCULPT_DASHBOARD_PORT=8420
       - SCULPT_APPROVAL_MODE=auto
       - SCULPT_LOG_LEVEL=INFO
-      # Local LLM via LM Studio on host
-      - SCULPT_LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
-      - SCULPT_EVOLUTION_LLM_PROVIDER=lmstudio
+      - SCULPT_EVOLUTION_LLM_PROVIDER=${SCULPT_EVOLUTION_LLM_PROVIDER:-auto}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

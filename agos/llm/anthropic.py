@@ -37,7 +37,8 @@ class AnthropicProvider(BaseLLMProvider):
         if base_url:
             kwargs["base_url"] = base_url
         self._client = anthropic.AsyncAnthropic(**kwargs)
-        self._model = model
+        # Strip provider prefix (e.g. "anthropic/claude-haiku-4-5" → "claude-haiku-4-5")
+        self._model = model.split("/", 1)[1] if model.startswith("anthropic/") else model
 
     async def validate_key(self) -> tuple[bool, str]:
         """Validate the API key with a cheap test call. Returns (ok, error_msg)."""
