@@ -4272,9 +4272,14 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         return;
     }
     desktop.dataset.hash = newHash;
-    // In spectator mode, prepend the hero welcome into the rendered HTML
+    // In spectator mode, prepend the hero — preserve counter values across re-renders
     if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
-        html = '<div id="spectator-welcome"><h2>OpenSculpt</h2><p>You are watching a self-evolving agentic OS. It deploys apps, learns from failures, and evolves itself.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">-</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">-</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">-</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">-</div><div class="label">Demands</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">&#x2B50; GitHub</a><a href="#" onclick="openReplay();return false">&#x23F0; Replay 24h</a></div></div>' + html;
+        var _sg = (document.getElementById('sw-goals')||{}).textContent || '0';
+        var _ss = (document.getElementById('sw-services')||{}).textContent || '0';
+        var _sk = (document.getElementById('sw-skills')||{}).textContent || '0';
+        var _sd = (document.getElementById('sw-demands')||{}).textContent || '0';
+        var _se = (document.getElementById('sw-evolutions')||{}).textContent || '0';
+        html = '<div id="spectator-welcome"><h2>OpenSculpt</h2><p>A self-evolving agentic OS, running live. It deploys apps, fails, learns, and evolves — all on its own.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">' + _sg + '</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">' + _ss + '</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">' + _sk + '</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">' + _sd + '</div><div class="label">Demands</div></div><div class="sw-stat"><div class="num" id="sw-evolutions">' + _se + '</div><div class="label">Evolutions</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">\u2B50 GitHub</a><a href="#" onclick="openReplay();return false">\u23F0 Replay 24h</a></div></div>' + html;
     }
     desktop.innerHTML = html;
 
@@ -5924,7 +5929,7 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         /* ── 1. HIDE ALL OPERATOR UI ── */
         .nudge-banner, .evo-nudge, .topbar-right, #command-bar, .prompt-chips,
         #status-line, .chat-overlay, .chat-backdrop, .dock-vitals,
-        #tb-cost, #tb-services, #h-uptime { display:none !important; }
+        #tb-cost, #tb-services, #h-uptime, .status-strip { display:none !important; }
 
         /* ── 2. TOPBAR — minimal with LIVE badge ── */
         .topbar { right:38% !important; border-bottom:1px solid rgba(232,164,74,0.12) !important; }
