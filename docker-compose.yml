@@ -5,8 +5,8 @@ services:
     ports:
       - "8420:8420"
     environment:
-      - SCULPT_LLM_API_KEY=${SCULPT_LLM_API_KEY:-lm-studio}
-      - SCULPT_DEFAULT_MODEL=${SCULPT_DEFAULT_MODEL:-gemma-4-e4b-it}
+      - SCULPT_LLM_API_KEY=${SCULPT_LLM_API_KEY:-}
+      - SCULPT_DEFAULT_MODEL=${SCULPT_DEFAULT_MODEL:-anthropic/claude-haiku-4-5}
       - SCULPT_GITHUB_TOKEN=${SCULPT_GITHUB_TOKEN:-}
       - SCULPT_AUTO_SHARE_EVERY=${SCULPT_AUTO_SHARE_EVERY:-0}
       - SCULPT_DASHBOARD_HOST=0.0.0.0
