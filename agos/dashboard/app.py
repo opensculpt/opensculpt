@@ -3888,9 +3888,9 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         return;
     }
 
-    // Hide welcome (or spectator-welcome) when goals exist
-    const welcomeEl = document.getElementById('welcome-state') || document.getElementById('spectator-welcome');
-    if (welcomeEl) welcomeEl.style.display = 'none';
+    // Hide welcome when goals exist (but keep spectator-welcome visible always)
+    const welcomeEl = document.getElementById('welcome-state');
+    if (welcomeEl && !welcomeEl.id.includes('spectator')) welcomeEl.style.display = 'none';
 
     // Sort: active goals first, then completed (user cares about what's happening NOW)
     const activeGoals = goals.filter(g => g.status === 'active' || g.status === 'operating' || g.status === 'planning');
@@ -4272,6 +4272,10 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         return;
     }
     desktop.dataset.hash = newHash;
+    // In spectator mode, prepend the hero welcome into the rendered HTML
+    if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+        html = '<div id="spectator-welcome"><h2>OpenSculpt</h2><p>You\\'re watching a self-evolving agentic OS. It deploys apps, learns from failures, and evolves itself.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">-</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">-</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">-</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">-</div><div class="label">Demands</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">&#x2B50; GitHub</a><a href="#" onclick="openReplay();return false">&#x23F0; Replay 24h</a></div></div>' + html;
+    }
     desktop.innerHTML = html;
 
     // Restore collapsed/expanded state after re-render
@@ -5982,6 +5986,7 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         // Filter noise FIRST — before building the event
         if (topic.includes('network.dns') || topic.includes('disk.') || topic.includes('quality.') || topic.includes('codebase.') || topic.includes('network.self')) return;
         if (topic.includes('cleanup') || topic.includes('gc.') || topic.includes('reality_check')) return;
+        if (topic.includes('security') || topic.includes('vuln') || topic.includes('injection') || topic.includes('profile')) return;
         if (topic.includes('phase_completed') && data.status === 'done') { icon = '\u2713'; text = (data.phase || '').replace(/_/g, ' '); color = 'var(--green)'; }
         else if (topic.includes('phase_completed')) { icon = '\u2717'; text = 'FAILED: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--red)'; }
         else if (topic.includes('phase_retrying')) { icon = '\u21BB'; text = 'RETRY: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--yellow)'; }
