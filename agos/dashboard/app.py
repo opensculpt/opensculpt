@@ -229,9 +229,11 @@ async def index() -> HTMLResponse:
     if not key:
         key = settings.dashboard_api_key or ""
     import json as _json
+    # Don't expose API key in spectator mode — it's not needed (auth is bypassed)
+    injected_key = "" if settings.spectator_mode else key
     html = _DASHBOARD_HTML.replace(
         "/*__SCULPT_API_KEY__*/",
-        f"var _SCULPT_API_KEY = {_json.dumps(key)};\nvar _SPECTATOR_MODE = {'true' if settings.spectator_mode else 'false'};",
+        f"var _SCULPT_API_KEY = {_json.dumps(injected_key)};\nvar _SPECTATOR_MODE = {'true' if settings.spectator_mode else 'false'};",
     )
     return HTMLResponse(html)
 
