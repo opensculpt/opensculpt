@@ -6213,6 +6213,32 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
     // ── REPLAY ──
     var _replayEvents = [], _replayTimer = null, _replayIdx = 0;
     var speedMap = {1:120, 2:360, 3:720, 4:1440, 5:2880};
+    // Noise filter for replay + live feed
+    function isNoise(t) {
+        return t.includes('network.dns') || t.includes('disk.') || t.includes('quality.') || t.includes('codebase.') ||
+            t.includes('network.self') || t.includes('cleanup') || t.includes('gc.') || t.includes('reality_check') ||
+            t.includes('security') || t.includes('vuln') || t.includes('injection') || t.includes('profile') ||
+            t.includes('boot') || t.includes('system.cycle') || t.includes('os.thinking') || t.includes('tool_result');
+    }
+    // Classify an event into {color, text, cls} for both replay and live feed
+    function classifyEvent(topic, data) {
+        var color = 'var(--text2)', text = '', cls = '';
+        if (topic.includes('phase_completed') && data.status === 'done') { color='var(--green)'; text='\u2713 '+(data.phase||'').replace(/_/g,' '); cls='sf-success'; }
+        else if (topic.includes('phase_completed')) { color='var(--red)'; text='\u2717 FAILED: '+(data.phase||'').replace(/_/g,' '); cls='sf-fail'; }
+        else if (topic.includes('phase_retrying')) { color='var(--yellow)'; text='\u21BB RETRY: '+(data.phase||'').replace(/_/g,' '); cls='sf-learn'; }
+        else if (topic.includes('goal_created')) { color='var(--purple)'; text='\u25B6 '+(data.description||'').slice(0,60); cls='sf-goal'; }
+        else if (topic.includes('goal_completed')) { color='var(--green)'; text='\u2713 DONE: '+(data.description||'').slice(0,50); cls='sf-success'; }
+        else if (topic.includes('evolution') || topic.includes('demand')) { color='var(--accent)'; text='\u2B50 '+topic.split('.').pop().replace(/_/g,' '); cls='sf-learn'; }
+        else if (topic.includes('capability_gap')) { color='var(--yellow)'; text='\u26A0 GAP: '+(data.tool||data.detail||''); cls='sf-learn'; }
+        else if (topic.includes('tool_call')) { color='var(--cyan)'; text='\uD83D\uDD27 '+(data.tool||''); }
+        else if (topic.includes('sub_agent.spawned')) { color='var(--cyan)'; text='\uD83D\uDE80 Agent: '+(data.name||''); }
+        else if (topic.includes('sub_agent.done')) { color='var(--green)'; text='\u2713 Agent done: '+(data.name||''); cls='sf-success'; }
+        else if (topic.includes('skill') || topic.includes('learned')) { color='var(--green)'; text='\uD83D\uDCA1 Learned: '+(data.name||topic.split('.').pop()); cls='sf-learn'; }
+        else if (topic.includes('service') && topic.includes('healthy')) { color='var(--green)'; text='\u2713 Service healthy'; cls='sf-success'; }
+        else { text='\u2022 '+topic.split('.').slice(-2).join(' ').replace(/_/g,' '); }
+        return {color:color, text:text, cls:cls};
+    }
+
     async function openReplay() {
         var modal = document.getElementById('replay-modal');
         modal.style.display = 'flex';
@@ -6220,8 +6246,10 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">Loading events...</div>';
         var events = await fetchJSON('/api/events?limit=500&topic=*');
         if (!events || !events.length) { body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">No events yet. Check back soon.</div>'; return; }
-        _replayEvents = events.reverse(); _replayIdx = 0;
-        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">' + events.length + ' events ready. Press Play.</div>';
+        // Filter noise BEFORE replay — only keep milestone events
+        _replayEvents = events.reverse().filter(function(ev) { return !isNoise(ev.topic || ''); });
+        _replayIdx = 0;
+        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">' + _replayEvents.length + ' events ready. Press Play.</div>';
         document.getElementById('replay-play-btn').innerHTML = '\u25B6 Play';
     }
     function toggleReplay() {
@@ -6233,15 +6261,9 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         function tick() {
             if (_replayIdx >= _replayEvents.length) { clearInterval(_replayTimer); _replayTimer = null; document.getElementById('replay-play-btn').innerHTML = '\u25B6 Replay'; _replayIdx = 0; return; }
             var ev = _replayEvents[_replayIdx++], topic = ev.topic || '', data = ev.data || {}, ts = ev.timestamp || '', time = ts ? ts.slice(11,19) : '';
-            var color = 'var(--text2)', text = topic.split('.').slice(-2).join(' ').replace(/_/g,' '), cls = '';
-            if (topic.includes('phase_completed') && data.status === 'done') { color='var(--green)'; text='\u2713 ' + (data.phase||''); cls='sf-success'; }
-            else if (topic.includes('phase_completed')) { color='var(--red)'; text='\u2717 FAILED: '+(data.phase||''); cls='sf-fail'; }
-            else if (topic.includes('goal_created')) { color='var(--purple)'; text='\u25B6 '+(data.description||'').slice(0,50); cls='sf-goal'; }
-            else if (topic.includes('goal_completed')) { color='var(--green)'; text='\u2713 DONE: '+(data.description||'').slice(0,40); cls='sf-success'; }
-            else if (topic.includes('evolution') || topic.includes('demand')) { color='var(--accent)'; text='\u2B50 '+topic.split('.').pop().replace(/_/g,' '); cls='sf-learn'; }
-            else if (topic.includes('capability_gap')) { color='var(--yellow)'; text='\u26A0 GAP: '+(data.tool||data.detail||''); cls='sf-learn'; }
-            var el = document.createElement('div'); el.className = 'sf-event' + (cls ? ' '+cls : '');
-            el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">'+esc(time)+'</span><span style="color:'+color+'">'+esc(text)+'</span>';
+            var c = classifyEvent(topic, data);
+            var el = document.createElement('div'); el.className = 'sf-event' + (c.cls ? ' '+c.cls : '');
+            el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">'+esc(time)+'</span><span style="color:'+c.color+'">'+esc(c.text)+'</span>';
             body.appendChild(el); body.scrollTop = body.scrollHeight;
             if (timeLabel) timeLabel.textContent = time;
             var spd = speedMap[parseInt(speedSlider.value)] || 720; if (speedLabel) speedLabel.textContent = spd + 'x';
