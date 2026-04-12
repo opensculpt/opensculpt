@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Callable, Awaitable
@@ -15,6 +16,8 @@ from typing import Any, Callable, Awaitable
 from pydantic import BaseModel, Field
 
 from agos.types import new_id
+
+_logger = logging.getLogger(__name__)
 
 EventHandler = Callable[["Event"], Awaitable[None]]
 
@@ -62,19 +65,32 @@ class EventBus:
             if len(self._history) > self._history_limit:
                 self._history = self._history[-self._history_limit:]
 
-        # Find matching handlers
-        tasks = []
+        # Find matching handlers — track origin for error reporting
+        tasks: list[Awaitable[None]] = []
+        labels: list[str] = []
         for pattern, handlers in self._subscribers.items():
             if fnmatch.fnmatch(topic, pattern):
                 for handler in handlers:
                     tasks.append(handler(event))
+                    labels.append(f"{pattern} -> {getattr(handler, '__qualname__', repr(handler))}")
 
         # Broadcast to WebSocket connections
         for ws_send in self._ws_connections:
             tasks.append(ws_send(event))
+            labels.append(f"ws -> {getattr(ws_send, '__qualname__', repr(ws_send))}")
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Log any exceptions instead of silently swallowing them.
+            # We still use return_exceptions=True so one bad handler doesn't
+            # break the others, but we surface failures so bugs aren't hidden.
+            for label, result in zip(labels, results):
+                if isinstance(result, BaseException):
+                    _logger.error(
+                        "EventBus handler failed: topic=%s handler=%s error=%s: %s",
+                        topic, label, type(result).__name__, result,
+                        exc_info=result,
+                    )
 
         return event
 

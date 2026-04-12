@@ -1,0 +1,41 @@
+# fly.toml app configuration file generated for opensculpt-live on 2026-04-11T17:22:22-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'opensculpt-live'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  SCULPT_APPROVAL_MODE = 'auto'
+  SCULPT_DASHBOARD_HOST = '0.0.0.0'
+  SCULPT_DASHBOARD_PORT = '8420'
+  SCULPT_DEFAULT_MODEL = 'anthropic/claude-haiku-4-5'
+  SCULPT_EVOLUTION_LLM_PROVIDER = 'openrouter'
+  SCULPT_LOG_LEVEL = 'INFO'
+  SCULPT_SPECTATOR_MODE = 'true'
+
+[[mounts]]
+  source = 'opensculpt_data'
+  destination = '/app/.opensculpt'
+
+[http_service]
+  internal_port = 8420
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/api/status'
+
+[[vm]]
+  size = 'shared-cpu-2x'
+  memory = '2gb'

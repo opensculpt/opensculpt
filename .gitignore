@@ -83,3 +83,4 @@ search.html
 
 # Website Playwright artifacts
 website/.playwright-mcp/
+.gstack/

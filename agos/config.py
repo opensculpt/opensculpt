@@ -84,6 +84,7 @@ class AgosSettings(BaseSettings):
 
     # Dashboard security
     dashboard_api_key: str = ""  # Set SCULPT_DASHBOARD_API_KEY to require auth
+    spectator_mode: bool = False  # Set SCULPT_SPECTATOR_MODE=true for read-only public dashboard
 
     # LLM capability probe
     model_context_window: int = 0  # 0 = auto-detect from probe/known table; set to override (e.g. 8192)

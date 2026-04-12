@@ -87,6 +87,9 @@ async def main() -> None:
     settings.workspace_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Seed setup.json from env vars if empty (spectator mode / fresh deploy) ──
+    # The wizard normally writes provider config. When skipped (spectator mode),
+    # we seed from SCULPT_LLM_API_KEY + SCULPT_EVOLUTION_LLM_PROVIDER so that
+    # _load_from_setup() in the evolution router finds the user's config.
     from agos.setup_store import load_setup, save_setup
     _setup = load_setup(settings.workspace_dir)
     if not _setup.get("providers") and settings.llm_api_key:
@@ -212,13 +215,18 @@ async def main() -> None:
                     return
         except Exception:
             pass
-        # Fallback: Anthropic env var
-        if llm is None and settings.anthropic_api_key:
-            from agos.llm.anthropic import AnthropicProvider
-            llm = AnthropicProvider(
-                api_key=settings.anthropic_api_key,
-                model=settings.default_model,
-            )
+        # Fallback: auto-detect provider from API key prefix
+        if llm is None and settings.llm_api_key:
+            detected = _detect_provider_from_key(settings.llm_api_key)
+            from agos.llm.providers import ALL_PROVIDERS
+            provider_name = detected or "anthropic"
+            cls = ALL_PROVIDERS.get(provider_name)
+            if cls:
+                try:
+                    llm = cls(api_key=settings.llm_api_key, model=settings.default_model)
+                    _logger.info("Fallback LLM: %s (auto-detected from key prefix)", provider_name)
+                except Exception as e:
+                    _logger.warning("Fallback LLM init failed for %s: %s", provider_name, e)
 
     try:
         await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, _init_llm), timeout=30)
@@ -486,6 +494,13 @@ async def main() -> None:
         resource_registry=resource_registry,
         service_keeper=service_keeper,
     )
+
+    # Scenario auto-runner (spectator mode only)
+    if settings.spectator_mode:
+        from agos.daemons.scenario_runner import ScenarioRunner
+        scenario_runner = ScenarioRunner(os_agent=os_agent)
+        asyncio.create_task(scenario_runner.start())
+        _logger.info("ScenarioRunner started (spectator mode)")
 
     # Reality check loop: verify tracked resources are actually alive
     async def _reality_check_loop():

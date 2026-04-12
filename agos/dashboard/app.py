@@ -24,11 +24,32 @@ from agos.a2a.server import router as a2a_router, set_server as set_a2a_server
 # ── API key authentication middleware ────────────────────────────
 _AUTH_SKIP_PATHS = frozenset({"/", "/health", "/api/status", "/docs", "/openapi.json", "/logo.jpg", "/favicon.ico"})
 
+# Endpoints blocked in spectator mode (all mutating operations)
+_SPECTATOR_BLOCKED = frozenset({
+    "/api/os/command", "/api/goals/cancel", "/api/wizard/save",
+    "/api/wizard/complete", "/api/setup/provider", "/api/setup/api-key",
+    "/api/services/restart", "/api/services/stop", "/api/services/decommission",
+    "/api/reload", "/api/mcp/connect", "/api/mcp/disconnect",
+})
+
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Require X-API-Key header when SCULPT_DASHBOARD_API_KEY is set."""
+    """Require X-API-Key header when SCULPT_DASHBOARD_API_KEY is set.
+    In spectator mode, block all POST/PUT/DELETE to mutating endpoints."""
 
     async def dispatch(self, request: Request, call_next):
+        # Spectator mode: block mutating endpoints, allow all reads
+        if settings.spectator_mode and request.method in ("POST", "PUT", "DELETE"):
+            path = request.url.path
+            # Block exact matches and prefix matches (e.g. /api/services/foo/stop)
+            if path in _SPECTATOR_BLOCKED or any(path.startswith(p) for p in _SPECTATOR_BLOCKED):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Spectator mode — read-only access"},
+                )
+        # API key auth (skip in spectator mode — public viewers don't need keys)
+        if settings.spectator_mode:
+            return await call_next(request)
         api_key = settings.dashboard_api_key
         if not api_key:
             return await call_next(request)
@@ -208,9 +229,11 @@ async def index() -> HTMLResponse:
     if not key:
         key = settings.dashboard_api_key or ""
     import json as _json
+    # Don't expose API key in spectator mode — it's not needed (auth is bypassed)
+    injected_key = "" if settings.spectator_mode else key
     html = _DASHBOARD_HTML.replace(
         "/*__SCULPT_API_KEY__*/",
-        f"var _SCULPT_API_KEY = {_json.dumps(key)};",
+        f"var _SCULPT_API_KEY = {_json.dumps(injected_key)};\nvar _SPECTATOR_MODE = {'true' if settings.spectator_mode else 'false'};",
     )
     return HTMLResponse(html)
 
@@ -354,8 +377,12 @@ async def set_api_key(payload: ApiKeyPayload) -> dict:
     provider_name = payload.provider or "anthropic"
     model = payload.model or settings.default_model
 
-    if not key and provider_name != "lmstudio":
-        return {"ok": False, "error": "API key cannot be empty"}
+    # Allow model-only updates when key is already configured via env var
+    if not key and provider_name not in ("lmstudio", "ollama"):
+        existing_key = getattr(settings, 'llm_api_key', '') or ''
+        if not existing_key:
+            return {"ok": False, "error": "API key cannot be empty"}
+        key = existing_key
 
     _base_url = payload.base_url.strip() if payload.base_url else ""
 
@@ -1147,6 +1174,8 @@ async def skip_phase(goal_id: str, body: dict = {}) -> dict:
 
 @dashboard_app.get("/api/wizard/status")
 async def wizard_status() -> dict:
+    if settings.spectator_mode:
+        return {"first_run": False}  # skip wizard in spectator mode
     from agos.setup_store import is_first_run
     return {"first_run": is_first_run(pathlib.Path(settings.workspace_dir))}
 
@@ -1361,8 +1390,8 @@ async def wizard_probe() -> dict:
     ws = pathlib.Path(settings.workspace_dir)
 
     # Get the OS agent's LLM provider
-    os_agent = _get_os_agent()
-    if not os_agent or not os_agent._llm:
+    os_agent = _os_agent
+    if not os_agent or not getattr(os_agent, '_llm', None):
         return {"error": "No LLM configured. Set a provider first.", "tier": "dead"}
 
     model_id = getattr(os_agent._llm, "_model", "")
@@ -2945,6 +2974,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .desktop { position: absolute; top: 32px; left: 0; right: 0; bottom: 100px; overflow-y: auto; overflow-x: hidden; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; align-content: start; z-index: 1; max-width: 1440px; margin: 0 auto; }
 .desktop.has-status { top: 76px; }
 .desktop.has-nudge { top: 68px; }
+.desktop.has-status.has-nudge { top: 120px; }
 .desktop::-webkit-scrollbar { width: 4px; }
 .desktop::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
 
@@ -3018,9 +3048,9 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .prompt-chip:hover { border-color: var(--purple); color: var(--text); background: rgba(168,85,247,0.08); }
 
 /* ── Chat Overlay (slides up from command bar) ── */
-.chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; }
+.chat-backdrop { display: none; position: fixed; inset: 0; z-index: 48; background: rgba(0,0,0,0.4); }
 .chat-backdrop.active { display: block; }
-.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); max-height: 60vh; background: rgba(17,19,26,0.95); border: 1px solid var(--border); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.4); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
+.chat-overlay { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); width: min(700px, 90vw); min-height: 200px; max-height: 60vh; background: rgba(22,26,37,0.98); border: 1px solid rgba(155,122,237,0.25); border-radius: 16px 16px 0 0; backdrop-filter: blur(20px); box-shadow: 0 -8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(155,122,237,0.1); z-index: 49; display: none; flex-direction: column; overflow: hidden; }
 .chat-overlay.active { display: flex; animation: slideUp 0.3s ease; }
 .chat-overlay-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .chat-overlay-header span { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -3031,7 +3061,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .chat-user { align-self: flex-end; max-width: 75%; background: var(--purple); color: #fff; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: 14px; word-wrap: break-word; }
 .chat-os { align-self: flex-start; max-width: 80%; background: var(--bg3); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: 13px; color: var(--text); line-height: 1.5; }
-.chat-os.error { border-color: var(--red); background: rgba(248,81,73,0.08); }
+.chat-os.error { border-color: var(--red); background: rgba(248,81,73,0.12); color: #fca5a5; }
 .chat-os.success { border-color: var(--green); }
 
 /* ── Dock (bottom bar, like macOS dock) ── */
@@ -3245,7 +3275,8 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 @keyframes wizShimmer { 0%,100% { transform: translateX(-100%); } 50% { transform: translateX(100%); } }
 
 /* ── Status Strip (44px, below topbar) ── */
-.status-strip { position: fixed; top: 40px; left: 0; right: 0; height: 44px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 12px; z-index: 99; backdrop-filter: blur(12px); cursor: pointer; }
+.status-strip { position: fixed; top: 40px; left: 0; right: 0; height: 44px; background: rgba(14,16,24,0.95); border-bottom: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 12px; z-index: 98; backdrop-filter: blur(12px); cursor: pointer; }
+.status-strip.has-nudge { top: 68px; }
 .status-strip.active { display: flex; }
 .status-strip-text { font-size: 13px; font-weight: 600; color: var(--text); }
 .status-strip-phase { font-size: 12px; color: var(--cyan); }
@@ -3266,7 +3297,7 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 
 
 /* ── Chat Empty State ── */
 .chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; text-align: center; color: var(--text2); gap: 12px; }
-.chat-empty h3 { font-size: 14px; font-weight: 600; color: var(--text); }
+.chat-empty h3 { font-size: 17px; font-weight: 700; color: var(--accent2); }
 .chat-empty p { font-size: 12px; max-width: 280px; line-height: 1.5; }
 
 /* ── Thinking Indicator ── */
@@ -3284,9 +3315,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 /* ── Touch Targets (a11y) ── */
 .cmd-send, .cmd-mic { min-width: 44px; min-height: 44px; }
 
-/* ── Reduced Motion (a11y) ── */
+/* ── Reduced Motion (a11y) — only decorative animations, keep functional transitions ── */
 @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+    .goal-card, .goal-card:hover, .special-card, .toast, .wizard-box, .evo-nudge, body::before { animation: none !important; }
+    .goal-card-ring .ring-fill { animation: none !important; }
+    .cmd-mic.recording { animation: none !important; }
+    .skeleton { animation: none !important; }
+    .think-dots span { animation: none !important; }
+    .goal-card.just-completed { animation: none !important; }
 }
 </style>
 </head>
@@ -3332,32 +3368,37 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         <h2>What do you want me to handle?</h2>
         <p>Type a command below. Try "run sales for my startup" or "set up monitoring"</p>
     </div>
-</div>
+</main>
 
 <!-- ═══ CHAT OVERLAY (slides up from command bar) ═══ -->
 <div class="chat-backdrop" id="chat-backdrop" onclick="closeChatOverlay()"></div>
-<div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()">
+<div class="chat-overlay" id="chat-overlay" onclick="event.stopPropagation()" role="complementary" aria-label="Conversation">
     <div class="chat-overlay-header">
         <span>Conversation</span>
         <div style="display:flex;gap:8px;align-items:center">
-            <button onclick="clearChat()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer">Clear</button>
-            <button class="chat-overlay-close" onclick="closeChatOverlay()">&times;</button>
+            <button onclick="clearChat()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer" aria-label="Clear conversation">Clear</button>
+            <button class="chat-overlay-close" onclick="closeChatOverlay()" aria-label="Close conversation">&times;</button>
         </div>
     </div>
-    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-messages" id="chat-messages">
+        <div class="chat-empty" id="chat-empty-state">
+            <h3>Talk to OpenSculpt</h3>
+            <p>Ask me to set up software, manage services, or handle tasks for your business.</p>
+        </div>
+    </div>
 </div>
 
 <!-- ═══ STATUS LINE (above command bar) ═══ -->
 <div id="status-line" style="position:fixed;bottom:92px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--text2);z-index:50;text-align:center;max-width:600px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></div>
 
 <!-- ═══ COMMAND BAR (Spotlight-style, always visible) ═══ -->
-<div class="command-bar" id="command-bar" onclick="event.stopPropagation()">
+<div class="command-bar" id="command-bar" onclick="event.stopPropagation()" role="search" aria-label="Command bar">
     <div class="command-bar-inner">
-        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="toggleChatOverlay()" title="Toggle conversation">
+        <img src="/logo.jpg" alt="OpenSculpt" style="height:28px;width:28px;border-radius:6px;object-fit:cover;padding-left:4px;cursor:pointer" onclick="toggleChatOverlay()" title="Toggle conversation" role="button" aria-label="Toggle conversation">
         <input type="text" class="cmd-input" id="os-cmd" placeholder="Ask OpenSculpt anything..." autocomplete="off"
-               onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" />
-        <button class="cmd-send" onclick="runCommand()" title="Send">&#9654;</button>
-        <button class="cmd-mic" id="mic-btn" onclick="toggleVoice()" title="Voice">&#x1F3A4;</button>
+               onkeydown="if(event.key==='Enter')runCommand()" onfocus="onCmdFocus()" aria-label="Command input" />
+        <button class="cmd-send" id="cmd-send-btn" onclick="runCommand()" title="Send" aria-label="Send command"><span>&#9654;</span></button>
+        <button class="cmd-mic" id="mic-btn" onclick="toggleVoice()" title="Voice input" aria-label="Voice input">&#9834;</button>
     </div>
     <div class="prompt-chips" id="prompt-chips">
         <span class="prompt-chip" onclick="quickCmd('handle sales for my startup')">Sales CRM</span>
@@ -3369,7 +3410,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 </div>
 
 <!-- ═══ DOCK (bottom bar — running daemons + vitals) ═══ -->
-<div class="dock" id="dock">
+<nav class="dock" id="dock" role="navigation" aria-label="Running services">
     <div id="dock-daemons" style="display:flex;align-items:center;gap:4px"></div>
     <div class="dock-sep"></div>
     <div class="dock-vitals">
@@ -3377,7 +3418,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         <span>RAM <span id="dk-ram">-</span></span>
         <span id="dk-nodes-label" style="display:none">Nodes <span id="dk-nodes">-</span></span>
     </div>
-</div>
+</nav>
 
 <!-- ═══ DETAIL MODAL (expanded card view) ═══ -->
 <div class="detail-modal" id="detail-modal" onclick="if(event.target===this)closeDetail()">
@@ -3708,6 +3749,7 @@ let _daemonData = [];
 let _learnedData = [];
 let _chatHistory = [];
 let _collapsedGoals = new Set();  // tracks which goal cards have phases collapsed
+let _celebratedGoals = new Set(); // tracks goal IDs that have been celebrated
 let _expandedResources = new Set();  // tracks which resource sections are expanded
 // auto-share removed — users share via git PRs
 
@@ -3790,6 +3832,10 @@ function statusLabel(s) {
     if (s === 'needs_user') return 'Needs setup';
     return s || 'unknown';
 }
+function scrollToActiveGoal() {
+    const activeCard = document.querySelector('.goal-card.active-goal');
+    if (activeCard) activeCard.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
 let _connectionLost = false;
 async function fetchJSON(url) {
     try {
@@ -3830,16 +3876,21 @@ function renderDesktop(goals, resources, daemons, learned, services) {
     const welcome = document.getElementById('welcome-state');
 
     if (!goals.length && !learned.length) {
+        // In spectator mode, keep the spectator welcome — don't overwrite it
+        if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+            const sw = document.getElementById('spectator-welcome');
+            if (sw) sw.style.display = '';
+            return;
+        }
         desktop.innerHTML = '<div class="welcome" id="welcome-state"><h2>What do you want me to handle?</h2><p>Type a command below. Try "run sales for my startup" or "set up monitoring"</p></div>';
-        // Keep chips visible on welcome screen
         const chips = document.getElementById('prompt-chips');
         if (chips) chips.style.display = '';
         return;
     }
 
-    // Hide welcome but keep chips visible when conversation panel is open
+    // Hide welcome when goals exist (but keep spectator-welcome visible always)
     const welcomeEl = document.getElementById('welcome-state');
-    if (welcomeEl) welcomeEl.style.display = 'none';
+    if (welcomeEl && !welcomeEl.id.includes('spectator')) welcomeEl.style.display = 'none';
 
     // Sort: active goals first, then completed (user cares about what's happening NOW)
     const activeGoals = goals.filter(g => g.status === 'active' || g.status === 'operating' || g.status === 'planning');
@@ -4221,6 +4272,15 @@ function renderDesktop(goals, resources, daemons, learned, services) {
         return;
     }
     desktop.dataset.hash = newHash;
+    // In spectator mode, prepend the hero — preserve counter values across re-renders
+    if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+        var _sg = (document.getElementById('sw-goals')||{}).textContent || '0';
+        var _ss = (document.getElementById('sw-services')||{}).textContent || '0';
+        var _sk = (document.getElementById('sw-skills')||{}).textContent || '0';
+        var _sd = (document.getElementById('sw-demands')||{}).textContent || '0';
+        var _se = (document.getElementById('sw-evolutions')||{}).textContent || '0';
+        html = '<div id="spectator-welcome"><h2>OpenSculpt</h2><p>A self-evolving agentic OS, running live. It deploys apps, fails, learns, and evolves — all on its own.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">' + _sg + '</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">' + _ss + '</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">' + _sk + '</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">' + _sd + '</div><div class="label">Demands</div></div><div class="sw-stat"><div class="num" id="sw-evolutions">' + _se + '</div><div class="label">Evolutions</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">\u2B50 GitHub</a><a href="#" onclick="openReplay();return false">\u23F0 Replay 24h</a></div></div>' + html;
+    }
     desktop.innerHTML = html;
 
     // Restore collapsed/expanded state after re-render
@@ -4293,18 +4353,9 @@ function renderDock(daemons) {
         html += '<div class="dock-sep"></div>';
     }
 
-    // ── System daemons — compact, clickable for actions ──
+    // ── System daemons — only show goal_runner in dock ──
     const SYSTEM = new Set(['goal_runner', 'gc', 'researcher', 'monitor', 'digest', 'scheduler']);
-    const system = daemons.filter(d => SYSTEM.has(d.name));
     const domain = daemons.filter(d => !SYSTEM.has(d.name));
-
-    system.forEach(d => {
-        const dotClass = d.status === 'running' ? 'running' : d.status === 'error' ? 'error' : 'stopped';
-        html += '<div class="dock-item" onclick="toggleDaemonMenu(\'' + esc(d.name) + '\')" title="' + esc(d.description || d.name) + ' (click for actions)">' +
-            '<span class="dock-icon">' + (d.icon || '&#x2699;') + '</span>' +
-            '<span class="dock-label">' + esc(d.name) + '</span>' +
-            '<span class="dock-dot ' + dotClass + '"></span></div>';
-    });
 
     // ── Services pill ──
     if (domain.length > 0) {
@@ -4452,10 +4503,13 @@ function onCmdFocus() {
 
 function toggleChatOverlay() {
     const overlay = document.getElementById('chat-overlay');
+    const backdrop = document.getElementById('chat-backdrop');
     if (overlay.classList.contains('active')) {
         overlay.classList.remove('active');
-    } else if (_chatHistory.length > 0) {
+        if (backdrop) backdrop.classList.remove('active');
+    } else {
         overlay.classList.add('active');
+        if (backdrop) backdrop.classList.add('active');
     }
 }
 
@@ -4485,11 +4539,19 @@ function quickCmd(cmd) {
     setTimeout(() => openChatOverlay(), 300);
 }
 
+let _isSending = false;
 async function runCommand() {
     const input = document.getElementById('os-cmd');
     const cmd = input.value.trim();
-    if (!cmd) return;
+    if (!cmd || _isSending) return;
     input.value = '';
+
+    // Sending state — prevent double-fire
+    _isSending = true;
+    const _goalCountBefore = _goalData ? _goalData.length : 0;
+    const sendBtn = document.getElementById('cmd-send-btn');
+    input.classList.add('sending');
+    if (sendBtn) sendBtn.classList.add('sending');
 
     // Hide welcome screen but keep chips for quick actions
     const welcomeEl = document.getElementById('welcome-state');
@@ -4515,7 +4577,7 @@ async function runCommand() {
     // Add thinking indicator in chat (user can open chat to see details)
     const thinkBubble = document.createElement('div');
     thinkBubble.className = 'chat-os';
-    thinkBubble.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:6px;height:6px;background:var(--cyan);border-radius:50%;animation:dotPulse 1s infinite"></span> Processing...</div><div id="live-events" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>';
+    thinkBubble.innerHTML = '<div class="think-dots"><span></span><span></span><span></span> <span style="font-size:12px;color:var(--text2);margin-left:4px">Thinking...</span></div><div id="live-events" style="margin-top:6px;font-size:11px;color:var(--text2)"></div>';
     chatArea.appendChild(thinkBubble);
     chatArea.scrollTop = chatArea.scrollHeight;
 
@@ -4545,7 +4607,7 @@ async function runCommand() {
         }
     }
     let liveWs;
-    try { liveWs = new WebSocket('ws://'+location.host+'/ws/events'); liveWs.onmessage = onLiveEvent; } catch(e) {}
+    try { liveWs = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/events'); liveWs.onmessage = onLiveEvent; } catch(e) {}
 
     try {
         const ctrl = new AbortController();
@@ -4585,10 +4647,26 @@ async function runCommand() {
         thinkBubble.innerHTML = e.name === 'AbortError' ? 'Timed out — check the desktop for progress.' : 'Failed: ' + esc(e.message);
     } finally {
         if (liveWs) try { liveWs.close(); } catch(e) {}
+        // Reset sending state
+        _isSending = false;
+        const _input = document.getElementById('os-cmd');
+        const _sendBtn = document.getElementById('cmd-send-btn');
+        if (_input) _input.classList.remove('sending');
+        if (_sendBtn) _sendBtn.classList.remove('sending');
     }
     chatArea.scrollTop = chatArea.scrollHeight;
+    // Hide chat empty state after first message
+    const emptyState = document.getElementById('chat-empty-state');
+    if (emptyState) emptyState.style.display = 'none';
     // Refresh desktop after command
     refreshDesktop();
+    // Auto-minimize chat overlay if a NEW goal was created (compare count before/after)
+    setTimeout(() => {
+        if (_goalData && _goalData.length > _goalCountBefore) {
+            closeChatOverlay();
+            showToast('Goal created — check the desktop', 'success');
+        }
+    }, 1500);
 }
 
 /* ── Voice Input ── */
@@ -4739,32 +4817,69 @@ async function refreshDesktop() {
         }
     }
 
-    // Status line — show what the OS is doing right now
-    const statusLine = document.getElementById('status-line');
-    if (statusLine) {
+    // Status strip — show what the OS is doing right now (replaces old status-line)
+    const statusStrip = document.getElementById('status-strip-bar');
+    const ssText = document.getElementById('ss-text');
+    const ssPhase = document.getElementById('ss-phase');
+    const ssFill = document.getElementById('ss-fill');
+    const desktop2 = document.getElementById('desktop');
+    if (statusStrip && ssText && ssPhase && ssFill) {
         const activeGoal = goalList.find(g => g.status === 'active' || g.status === 'operating');
         if (activeGoal) {
+            statusStrip.classList.add('active');
+            if (desktop2) desktop2.classList.add('has-status');
             const ap = (activeGoal.phases || []).find(p => p.status === 'running');
             const doneCnt = (activeGoal.phases || []).filter(p => p.status === 'done' || p.status === 'done_unverified').length;
             const totalCnt = (activeGoal.phases || []).length;
-            if (ap) {
-                statusLine.textContent = 'Working on: ' + ap.name + ' (' + doneCnt + '/' + totalCnt + ')';
-                statusLine.style.color = 'var(--cyan)';
-            } else {
-                statusLine.textContent = activeGoal.description.slice(0, 60) + ' (' + doneCnt + '/' + totalCnt + ' phases)';
-                statusLine.style.color = 'var(--text2)';
-            }
+            const pctDone = totalCnt > 0 ? Math.round(doneCnt / totalCnt * 100) : 0;
+            ssText.textContent = extractTitle(activeGoal.description || '') + ' — ' + doneCnt + '/' + totalCnt;
+            ssPhase.textContent = ap ? '\u25B6 ' + (ap.name || '').replace(/_/g, ' ') : '';
+            ssPhase.style.color = '';  // Reset from potential green (all-done state)
+            ssFill.style.width = pctDone + '%';
         } else if (goalList.length) {
             const allDone = goalList.every(g => {
                 const p = g.phases || [];
                 return p.length > 0 && p.every(ph => ph.status === 'done' || ph.status === 'done_unverified');
             });
-            statusLine.textContent = allDone ? 'All goals complete' : 'Idle';
-            statusLine.style.color = 'var(--green)';
+            if (allDone) {
+                statusStrip.classList.add('active');
+                if (desktop2) desktop2.classList.add('has-status');
+                const svcCount = (servicesList || []).filter(s => s.status === 'healthy').length;
+                ssText.textContent = svcCount > 0 ? 'All goals complete \u00B7 ' + svcCount + ' services' : 'All goals complete';
+                ssPhase.textContent = svcCount > 0 ? '\u25CF running' : '';
+                ssPhase.style.color = 'var(--green)';
+                ssFill.style.width = '100%';
+            } else {
+                statusStrip.classList.remove('active');
+                if (desktop2) desktop2.classList.remove('has-status');
+            }
         } else {
-            statusLine.textContent = '';
+            statusStrip.classList.remove('active');
+            if (desktop2) desktop2.classList.remove('has-status');
         }
     }
+    // Legacy status line (kept for compat)
+    const statusLine = document.getElementById('status-line');
+    if (statusLine) statusLine.textContent = '';
+
+    // Goal completion celebration — detect newly completed goals
+    goalList.forEach((g, i) => {
+        const phases = g.phases || [];
+        const allDone = phases.length > 0 && phases.every(p => p.status === 'done' || p.status === 'done_unverified');
+        const cardEl = document.getElementById('gcard-' + i);
+        if (allDone && cardEl && !_celebratedGoals.has(g.id)) {
+            _celebratedGoals.add(g.id);
+            cardEl.classList.add('just-completed');
+            // Find service URL for this goal
+            const goalSvcs = (servicesList || []).filter(s => s.goal_id === g.id && s.url);
+            const svcUrl = goalSvcs.length ? goalSvcs[0].url : '';
+            const svcMsg = svcUrl ? ' Open: ' + svcUrl : '';
+            showToast('Goal complete: ' + extractTitle(g.description || '') + svcMsg, 'success');
+            // Remove celebration class after 2s, but keep full opacity for 30s
+            setTimeout(() => { if (cardEl) cardEl.classList.remove('just-completed'); }, 2000);
+            setTimeout(() => { if (cardEl) cardEl.style.opacity = ''; }, 30000);
+        }
+    });
 
     // Render dock
     renderDock(daemons);
@@ -4889,7 +5004,7 @@ async function refreshDesktop() {
    ═══════════════════════════════════════════════════════════════════ */
 
 try {
-    const ws = new WebSocket('ws://'+location.host+'/ws/events');
+    const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/events');
     ws.onmessage = e => {
         const ev = JSON.parse(e.data);
         eventCount++;
@@ -5337,6 +5452,7 @@ function onProviderChange() {
         document.getElementById('base-url-input').value = meta.baseUrl || '';
     } else {
         baseRow.style.display = 'none';
+        document.getElementById('base-url-input').value = '';  // Clear stale localhost from local providers
     }
     // Model suggestions
     const dl = document.getElementById('model-suggestions');
@@ -5780,9 +5896,11 @@ async function updateNudgeBanner() {
         const demands = (data && data.active_demands) ? data.active_demands.length : 0;
         const nudge = document.getElementById('evo-nudge');
         const desktop = document.getElementById('desktop');
+        const ss = document.getElementById('status-strip-bar');
         if (demands > 0) {
             nudge.classList.add('active');
             desktop.classList.add('has-nudge');
+            if (ss) ss.classList.add('has-nudge');
             const escalated = data.active_demands.filter(d => d.priority >= 0.8).length;
             document.getElementById('evo-nudge-text').textContent =
                 demands + ' evolution demand' + (demands !== 1 ? 's' : '') +
@@ -5791,6 +5909,7 @@ async function updateNudgeBanner() {
         } else {
             nudge.classList.remove('active');
             desktop.classList.remove('has-nudge');
+            if (ss) ss.classList.remove('has-nudge');
         }
     } catch(e) {}
 }
@@ -5798,8 +5917,367 @@ async function updateNudgeBanner() {
 /* ═══════════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════════ */
-// Wizard runs in isolated async context so other boot errors can't kill it
-(async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();
+// ── Spectator mode: hero welcome, prominent activity feed, replay button ──
+if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+    // ═══════════════════════════════════════════════════════════════
+    //  SPECTATOR MODE — Observatory aesthetic
+    //  Transforms operator dashboard into compelling live experience
+    // ═══════════════════════════════════════════════════════════════
+
+    const spectatorStyle = document.createElement('style');
+    spectatorStyle.textContent = `
+        /* ── 1. HIDE ALL OPERATOR UI ── */
+        .nudge-banner, .evo-nudge, .topbar-right, #command-bar, .prompt-chips,
+        #status-line, .chat-overlay, .chat-backdrop, .dock-vitals,
+        #tb-cost, #tb-services, #h-uptime, .status-strip { display:none !important; }
+
+        /* ── 2. TOPBAR — minimal with LIVE badge ── */
+        .topbar { right:38% !important; border-bottom:1px solid rgba(232,164,74,0.12) !important; }
+        .topbar-left::after {
+            content:'LIVE'; margin-left:14px; font-size:8px; font-weight:800;
+            letter-spacing:2px; color:var(--red); padding:3px 10px;
+            border:1px solid rgba(248,113,113,0.5); border-radius:4px;
+            animation:livePulse 2s ease infinite;
+        }
+        @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+        /* ── 3. NARRATIVE BAR ── */
+        #spectator-narrative {
+            position:fixed; top:40px; left:0; right:38%; height:32px;
+            background:rgba(14,16,24,0.92); border-bottom:1px solid rgba(155,122,237,0.1);
+            display:flex; align-items:center; padding:0 20px; font-size:12px;
+            color:var(--text2); z-index:50; backdrop-filter:blur(8px);
+        }
+        #spectator-narrative .sn-icon { margin-right:10px; font-size:14px; }
+        #spectator-narrative .sn-text { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sn-anim { animation:narrativeSlide 0.4s ease; }
+        @keyframes narrativeSlide { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+        /* ── 4. DESKTOP — room for narrative + feed ── */
+        .desktop { right:38% !important; bottom:48px !important; top:72px !important; padding:16px 20px !important; }
+
+        /* ── 5. HERO — cinematic with breathing glow ── */
+        #spectator-welcome { grid-column:1/-1; text-align:center; padding:36px 20px 20px; position:relative; }
+        #spectator-welcome::before {
+            content:''; position:absolute; top:-10px; left:50%; transform:translateX(-50%);
+            width:220px; height:220px; border-radius:50%; pointer-events:none;
+            background:radial-gradient(circle, rgba(155,122,237,0.07) 0%, transparent 70%);
+            animation:heroBreathe 4s ease-in-out infinite;
+        }
+        @keyframes heroBreathe { 0%,100%{transform:translateX(-50%) scale(1);opacity:0.5} 50%{transform:translateX(-50%) scale(1.3);opacity:1} }
+        #spectator-welcome h2 {
+            font-size:42px; font-weight:800; letter-spacing:-1px; margin-bottom:8px;
+            background:linear-gradient(135deg,var(--accent),var(--purple));
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+        }
+        #spectator-welcome p { color:var(--text2); font-size:14px; max-width:500px; margin:0 auto 24px; line-height:1.6; }
+        #spectator-welcome .sw-stats { display:flex; gap:36px; justify-content:center; margin:24px 0; }
+        #spectator-welcome .sw-stat { text-align:center; }
+        #spectator-welcome .sw-stat .num {
+            font-size:36px; font-weight:700; color:var(--text);
+            font-family:'Space Grotesk',sans-serif;
+            transition:all 0.5s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        #spectator-welcome .sw-stat .num.bump { transform:scale(1.2); color:var(--accent); }
+        #spectator-welcome .sw-stat .label { font-size:9px; color:var(--text2); text-transform:uppercase; letter-spacing:1.2px; margin-top:4px; }
+        #spectator-welcome .sw-links { margin-top:20px; display:flex; gap:10px; justify-content:center; }
+        #spectator-welcome .sw-links a {
+            font-size:11px; color:var(--accent); text-decoration:none; padding:8px 18px;
+            border:1px solid rgba(232,164,74,0.2); border-radius:8px;
+            background:rgba(232,164,74,0.03); transition:all 0.2s;
+        }
+        #spectator-welcome .sw-links a:hover { background:rgba(232,164,74,0.1); border-color:rgba(232,164,74,0.5); }
+
+        /* ── 6. FEED PANEL — observatory terminal ── */
+        #spectator-feed {
+            position:fixed; top:0; right:0; width:38%; height:100vh;
+            background:rgba(4,5,8,0.99); border-left:1px solid rgba(232,164,74,0.08);
+            z-index:10; overflow-y:auto; font-family:'JetBrains Mono',monospace;
+        }
+        #spectator-feed .sf-header {
+            padding:14px 18px; border-bottom:1px solid rgba(232,164,74,0.08);
+            display:flex; justify-content:space-between; align-items:center;
+            position:sticky; top:0; background:rgba(4,5,8,0.99); z-index:1; backdrop-filter:blur(10px);
+        }
+        #spectator-feed .sf-header h3 {
+            font-size:11px; font-weight:600; color:var(--accent); letter-spacing:1.5px; text-transform:uppercase; margin:0;
+        }
+        #spectator-feed .sf-header h3::before {
+            content:''; display:inline-block; width:6px; height:6px; background:var(--red);
+            border-radius:50%; margin-right:10px; animation:livePulse 2s ease infinite;
+        }
+        #spectator-feed .sf-body { padding:6px 14px; }
+        /* Event base */
+        .sf-event {
+            font-size:11px; padding:6px 10px; margin:2px 0; border-radius:4px;
+            display:flex; gap:10px; align-items:baseline; animation:sfFadeIn 0.3s ease;
+            border-left:3px solid transparent; transition:background 0.5s ease;
+        }
+        @keyframes sfFadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
+        /* Event types — failure is LOUD, success GLOWS, learning SHIMMERS */
+        .sf-event.sf-fail { background:rgba(248,113,113,0.08); border-left-color:var(--red); animation:sfFadeIn 0.3s ease, failFlash 1.5s ease; }
+        .sf-event.sf-success { background:rgba(74,222,128,0.05); border-left-color:var(--green); animation:sfFadeIn 0.3s ease, successGlow 2s ease; }
+        .sf-event.sf-learn { background:rgba(232,164,74,0.05); border-left-color:var(--accent); animation:sfFadeIn 0.3s ease, learnShimmer 2s ease; }
+        .sf-event.sf-goal { border-left-color:var(--purple); }
+        @keyframes failFlash { 0%{background:rgba(248,113,113,0.25)} 100%{background:rgba(248,113,113,0.08)} }
+        @keyframes successGlow { 0%{box-shadow:0 0 12px rgba(74,222,128,0.3)} 100%{box-shadow:none} }
+        @keyframes learnShimmer { 0%{background:rgba(232,164,74,0.15)} 50%{background:rgba(232,164,74,0.08)} 100%{background:rgba(232,164,74,0.05)} }
+
+        /* ── 7. DOCK ── */
+        .dock { right:38% !important; justify-content:center !important; }
+
+        /* ── 8. GOAL CARD POLISH ── */
+        .goal-card svg { transition:filter 0.3s; }
+        .active-goal svg { animation:ringBreathe 3s ease-in-out infinite; }
+        @keyframes ringBreathe { 0%,100%{filter:drop-shadow(0 0 3px var(--purple))} 50%{filter:drop-shadow(0 0 10px var(--purple))} }
+
+        /* ── 9. REPLAY MODAL ── */
+        .replay-btn { background:none; border:1px solid rgba(232,164,74,0.2); color:var(--accent); border-radius:6px; padding:4px 12px; font-size:10px; cursor:pointer; transition:all 0.2s; letter-spacing:0.5px; }
+        .replay-btn:hover { background:rgba(232,164,74,0.08); border-color:rgba(232,164,74,0.4); }
+        #replay-modal { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.8); display:none; justify-content:center; align-items:center; backdrop-filter:blur(4px); }
+        #replay-modal .rm-inner { background:var(--bg2); border:1px solid rgba(232,164,74,0.15); border-radius:14px; width:90%; max-width:700px; max-height:80vh; overflow:hidden; display:flex; flex-direction:column; }
+        #replay-modal .rm-header { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+        #replay-modal .rm-body { flex:1; overflow-y:auto; padding:12px 18px; font-family:'JetBrains Mono',monospace; font-size:11px; }
+        #replay-modal .rm-controls { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:12px; align-items:center; }
+        #replay-modal .rm-controls button { background:none; border:1px solid var(--border); color:var(--text); border-radius:6px; padding:4px 12px; font-size:12px; cursor:pointer; }
+        #replay-modal .rm-controls button:hover { border-color:var(--accent); }
+        #replay-modal .rm-controls input[type=range] { flex:1; accent-color:var(--accent); }
+
+        /* ── 10. EVOLUTION TOAST ── */
+        .evo-toast {
+            position:fixed; bottom:60px; left:20px; background:rgba(14,16,24,0.95);
+            border:1px solid rgba(74,222,128,0.3); border-radius:10px;
+            padding:12px 16px; font-size:11px; color:var(--text); z-index:200;
+            max-width:340px; animation:sfFadeIn 0.3s ease; backdrop-filter:blur(8px);
+        }
+    `;
+    document.head.appendChild(spectatorStyle);
+
+    // ── NARRATIVE BAR ──
+    const narrativeBar = document.createElement('div');
+    narrativeBar.id = 'spectator-narrative';
+    narrativeBar.innerHTML = '<span class="sn-icon">\uD83E\uDDE0</span><span class="sn-text sn-anim" id="sn-text">Watching OpenSculpt think...</span>';
+    document.body.appendChild(narrativeBar);
+
+    function updateNarrative(text, icon) {
+        const el = document.getElementById('sn-text');
+        const iconEl = el ? el.previousElementSibling : null;
+        if (el) { el.className = 'sn-text'; void el.offsetHeight; el.className = 'sn-text sn-anim'; el.textContent = text; }
+        if (iconEl && icon) iconEl.textContent = icon;
+    }
+
+    // ── HERO (welcome state replacement) ──
+    const welcome = document.getElementById('welcome-state');
+    if (welcome) {
+        welcome.id = 'spectator-welcome';
+        welcome.innerHTML = '<h2>OpenSculpt</h2><p>A self-evolving agentic OS, running live. It deploys apps, fails, learns, and evolves — all on its own.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">0</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">0</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">0</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">0</div><div class="label">Demands</div></div><div class="sw-stat"><div class="num" id="sw-evolutions">0</div><div class="label">Evolutions</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">\u2B50 GitHub</a><a href="#" onclick="openReplay();return false">\u23F0 Replay 24h</a></div>';
+    }
+
+    // ── LIVE FEED PANEL ──
+    const feedPanel = document.createElement('div');
+    feedPanel.id = 'spectator-feed';
+    feedPanel.innerHTML = '<div class="sf-header"><h3>Live Activity</h3><button class="replay-btn" onclick="openReplay()">\u23F0 Replay</button></div><div class="sf-body" id="sf-body"><div style="color:var(--text2);font-size:11px;text-align:center;padding:24px">Waiting for events...</div></div>';
+    document.body.appendChild(feedPanel);
+
+    // ── REPLAY MODAL ──
+    const replayModal = document.createElement('div');
+    replayModal.id = 'replay-modal';
+    replayModal.onclick = function(e) { if (e.target === replayModal) replayModal.style.display = 'none'; };
+    replayModal.innerHTML = '<div class="rm-inner"><div class="rm-header"><span style="font-weight:600;color:var(--text)">\u23F0 Evolution Replay</span><button onclick="document.getElementById(&quot;replay-modal&quot;).style.display=&quot;none&quot;" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer">&times;</button></div><div class="rm-body" id="replay-body"></div><div class="rm-controls"><button id="replay-play-btn" onclick="toggleReplay()">\u25B6 Play</button><input type="range" id="replay-speed" min="1" max="5" value="3" title="Speed"><span id="replay-speed-label" style="font-size:10px;color:var(--text2);min-width:40px">720x</span><span id="replay-time" style="font-size:10px;color:var(--text2);margin-left:auto">--:--</span></div></div>';
+    document.body.appendChild(replayModal);
+
+    // ── CYCLE DETECTION STATE ──
+    let _cyclePhase = 'idle'; // idle | failed | learning
+    let _lastFailPhase = '';
+    let _evolutionCount = 0;
+    let _lastEventTime = Date.now();
+
+    // ── EVENT HOOK — classify + narrate + detect cycles ──
+    const origAddActivity = window.addActivityEvent || addActivityEvent;
+    window.addActivityEvent = function(topic, data, ts) {
+        origAddActivity(topic, data, ts);
+        _lastEventTime = Date.now();
+        const sfBody = document.getElementById('sf-body');
+        if (!sfBody) return;
+        if (sfBody.children.length === 1 && sfBody.children[0].textContent.includes('Waiting')) sfBody.innerHTML = '';
+        const time = ts ? ts.slice(11, 19) : new Date().toISOString().slice(11, 19);
+
+        // Filter noise
+        if (topic.includes('network.dns') || topic.includes('disk.') || topic.includes('quality.') || topic.includes('codebase.') || topic.includes('network.self')) return;
+        if (topic.includes('cleanup') || topic.includes('gc.') || topic.includes('reality_check')) return;
+        if (topic.includes('security') || topic.includes('vuln') || topic.includes('injection') || topic.includes('profile')) return;
+
+        let icon = '', text = '', color = 'var(--text2)', evClass = '';
+
+        // Classify events + detect fail-learn-success cycle
+        if (topic.includes('phase_completed') && data.status === 'done') {
+            icon = '\u2713'; text = (data.phase || '').replace(/_/g, ' '); color = 'var(--green)'; evClass = 'sf-success';
+            if (_cyclePhase === 'learning') {
+                // CYCLE COMPLETE — the OS fixed itself!
+                _cyclePhase = 'idle';
+                _evolutionCount++;
+                updateNarrative('Fixed it! The OS evolved and succeeded.', '\u2728');
+                showCycleToast(_lastFailPhase, text);
+                const evoEl = document.getElementById('sw-evolutions');
+                if (evoEl) { evoEl.textContent = _evolutionCount; evoEl.classList.add('bump'); setTimeout(() => evoEl.classList.remove('bump'), 600); }
+            } else {
+                updateNarrative('Phase complete: ' + text, '\u2705');
+            }
+        }
+        else if (topic.includes('phase_completed')) {
+            icon = '\u2717'; text = 'FAILED: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--red)'; evClass = 'sf-fail';
+            _cyclePhase = 'failed'; _lastFailPhase = (data.phase || '').replace(/_/g, ' ');
+            updateNarrative('Something broke. Watching the OS figure it out...', '\u26A0\uFE0F');
+        }
+        else if (topic.includes('phase_retrying')) {
+            icon = '\u21BB'; text = 'RETRY: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--yellow)'; evClass = 'sf-learn';
+            if (_cyclePhase === 'failed') _cyclePhase = 'learning';
+            updateNarrative('Retrying with a new approach...', '\uD83D\uDD04');
+        }
+        else if (topic.includes('goal_created')) {
+            icon = '\u25B6'; text = (data.description || '').slice(0, 50); color = 'var(--purple)'; evClass = 'sf-goal';
+            updateNarrative('New goal: ' + text, '\uD83C\uDFAF');
+        }
+        else if (topic.includes('goal_completed')) {
+            icon = '\u2713'; text = 'DONE: ' + (data.description || '').slice(0, 40); color = 'var(--green)'; evClass = 'sf-success';
+            updateNarrative('Goal complete! ' + text, '\u2705');
+        }
+        else if (topic.includes('evolution') || topic.includes('demand')) {
+            icon = '\u2B50'; text = topic.split('.').pop().replace(/_/g, ' '); color = 'var(--accent)'; evClass = 'sf-learn';
+            if (_cyclePhase === 'failed') _cyclePhase = 'learning';
+            updateNarrative('Evolution: ' + text, '\u2B50');
+        }
+        else if (topic.includes('capability_gap')) {
+            icon = '\u26A0'; text = 'GAP: ' + (data.tool || data.detail || ''); color = 'var(--yellow)'; evClass = 'sf-learn';
+            if (_cyclePhase === 'failed') _cyclePhase = 'learning';
+            updateNarrative('Detected gap: ' + (data.tool || data.detail || ''), '\uD83D\uDD0D');
+        }
+        else if (topic.includes('tool_call')) { icon = '\uD83D\uDD27'; text = data.tool || ''; color = 'var(--cyan)'; updateNarrative('Using ' + (data.tool || ''), '\uD83D\uDD27'); }
+        else if (topic.includes('sub_agent')) { icon = '\uD83D\uDE80'; text = data.name || ''; color = 'var(--cyan)'; updateNarrative('Spawned agent: ' + (data.name || ''), '\uD83D\uDE80'); }
+        else if (topic.includes('skill') || topic.includes('learned')) { icon = '\uD83D\uDCA1'; text = 'Learned: ' + (data.name || topic.split('.').pop()); color = 'var(--green)'; evClass = 'sf-learn'; updateNarrative('Learned: ' + (data.name || ''), '\uD83D\uDCA1'); }
+        else { icon = '\u2022'; text = topic.split('.').slice(-2).join(' ').replace(/_/g, ' '); }
+
+        const el = document.createElement('div');
+        el.className = 'sf-event' + (evClass ? ' ' + evClass : '');
+        el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">' + esc(time) + '</span><span style="color:' + color + '">' + esc(icon + ' ' + text) + '</span>';
+        sfBody.prepend(el);
+        while (sfBody.children.length > 100) sfBody.lastChild.remove();
+    };
+
+    // ── EVOLUTION CYCLE TOAST ──
+    function showCycleToast(failPhase, successPhase) {
+        const toast = document.createElement('div');
+        toast.className = 'evo-toast';
+        toast.innerHTML = '<div style="color:var(--green);font-weight:700;margin-bottom:4px">\u2728 Evolution #' + _evolutionCount + '</div><div style="color:var(--text2)">Failed at <span style="color:var(--red)">' + esc(failPhase) + '</span>, adapted, and succeeded.</div>';
+        document.body.appendChild(toast);
+        setTimeout(function() { toast.style.opacity = '0'; toast.style.transition = 'opacity 1s'; setTimeout(function() { toast.remove(); }, 1000); }, 8000);
+    }
+
+    // ── ANIMATED STAT COUNTERS ──
+    let _prevStats = {goals:0, services:0, skills:0, demands:0};
+    function animateNum(el, from, to) {
+        if (!el || from === to) return;
+        el.classList.add('bump'); setTimeout(function() { el.classList.remove('bump'); }, 600);
+        var steps = 10, inc = (to - from) / steps, cur = from, step = 0;
+        var t = setInterval(function() { step++; cur += inc; el.textContent = Math.round(cur); if (step >= steps) { clearInterval(t); el.textContent = to; } }, 50);
+    }
+    async function updateSpectatorStats() {
+        var s = await fetchJSON('/api/status');
+        if (!s) return;
+        var gE = document.getElementById('sw-goals'), sE = document.getElementById('sw-services');
+        var skE = document.getElementById('sw-skills'), dE = document.getElementById('sw-demands');
+        try {
+            var goals = await fetchJSON('/api/goals');
+            if (goals && goals.goals) {
+                var gc = goals.goals.length, sk = 0;
+                goals.goals.forEach(function(g) { sk += (g.skills_learned || []).length; });
+                if (gc !== _prevStats.goals) { animateNum(gE, _prevStats.goals, gc); _prevStats.goals = gc; }
+                if (sk !== _prevStats.skills) { animateNum(skE, _prevStats.skills, sk); _prevStats.skills = sk; }
+            }
+        } catch(e) {}
+        var sv = s.resources_active || 0, dm = s.demand_signals || 0;
+        if (sv !== _prevStats.services) { animateNum(sE, _prevStats.services, sv); _prevStats.services = sv; }
+        if (dm !== _prevStats.demands) { animateNum(dE, _prevStats.demands, dm); _prevStats.demands = dm; }
+    }
+    updateSpectatorStats();
+    setInterval(updateSpectatorStats, 5000);
+
+    // ── ALWAYS-MOVING HEARTBEAT ──
+    setInterval(function() {
+        if (Date.now() - _lastEventTime > 15000) {
+            var secs = Math.max(0, Math.round(300 - (Date.now() - _lastEventTime) / 1000));
+            updateNarrative('Thinking... next scenario in ' + secs + 's', '\uD83E\uDDE0');
+        }
+    }, 5000);
+
+    // ── REPLAY ──
+    var _replayEvents = [], _replayTimer = null, _replayIdx = 0;
+    var speedMap = {1:120, 2:360, 3:720, 4:1440, 5:2880};
+    // Noise filter for replay + live feed
+    function isNoise(t) {
+        return t.includes('network.dns') || t.includes('disk.') || t.includes('quality.') || t.includes('codebase.') ||
+            t.includes('network.self') || t.includes('cleanup') || t.includes('gc.') || t.includes('reality_check') ||
+            t.includes('security') || t.includes('vuln') || t.includes('injection') || t.includes('profile') ||
+            t.includes('boot') || t.includes('system.cycle') || t.includes('os.thinking') || t.includes('tool_result');
+    }
+    // Classify an event into {color, text, cls} for both replay and live feed
+    function classifyEvent(topic, data) {
+        var color = 'var(--text2)', text = '', cls = '';
+        if (topic.includes('phase_completed') && data.status === 'done') { color='var(--green)'; text='\u2713 '+(data.phase||'').replace(/_/g,' '); cls='sf-success'; }
+        else if (topic.includes('phase_completed')) { color='var(--red)'; text='\u2717 FAILED: '+(data.phase||'').replace(/_/g,' '); cls='sf-fail'; }
+        else if (topic.includes('phase_retrying')) { color='var(--yellow)'; text='\u21BB RETRY: '+(data.phase||'').replace(/_/g,' '); cls='sf-learn'; }
+        else if (topic.includes('goal_created')) { color='var(--purple)'; text='\u25B6 '+(data.description||'').slice(0,60); cls='sf-goal'; }
+        else if (topic.includes('goal_completed')) { color='var(--green)'; text='\u2713 DONE: '+(data.description||'').slice(0,50); cls='sf-success'; }
+        else if (topic.includes('evolution') || topic.includes('demand')) { color='var(--accent)'; text='\u2B50 '+topic.split('.').pop().replace(/_/g,' '); cls='sf-learn'; }
+        else if (topic.includes('capability_gap')) { color='var(--yellow)'; text='\u26A0 GAP: '+(data.tool||data.detail||''); cls='sf-learn'; }
+        else if (topic.includes('tool_call')) { color='var(--cyan)'; text='\uD83D\uDD27 '+(data.tool||''); }
+        else if (topic.includes('sub_agent.spawned')) { color='var(--cyan)'; text='\uD83D\uDE80 Agent: '+(data.name||''); }
+        else if (topic.includes('sub_agent.done')) { color='var(--green)'; text='\u2713 Agent done: '+(data.name||''); cls='sf-success'; }
+        else if (topic.includes('skill') || topic.includes('learned')) { color='var(--green)'; text='\uD83D\uDCA1 Learned: '+(data.name||topic.split('.').pop()); cls='sf-learn'; }
+        else if (topic.includes('service') && topic.includes('healthy')) { color='var(--green)'; text='\u2713 Service healthy'; cls='sf-success'; }
+        else { text='\u2022 '+topic.split('.').slice(-2).join(' ').replace(/_/g,' '); }
+        return {color:color, text:text, cls:cls};
+    }
+
+    async function openReplay() {
+        var modal = document.getElementById('replay-modal');
+        modal.style.display = 'flex';
+        var body = document.getElementById('replay-body');
+        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">Loading events...</div>';
+        var events = await fetchJSON('/api/events?limit=500&topic=*');
+        if (!events || !events.length) { body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">No events yet. Check back soon.</div>'; return; }
+        // Filter noise BEFORE replay — only keep milestone events
+        _replayEvents = events.reverse().filter(function(ev) { return !isNoise(ev.topic || ''); });
+        _replayIdx = 0;
+        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">' + _replayEvents.length + ' events ready. Press Play.</div>';
+        document.getElementById('replay-play-btn').innerHTML = '\u25B6 Play';
+    }
+    function toggleReplay() {
+        if (_replayTimer) { clearInterval(_replayTimer); _replayTimer = null; document.getElementById('replay-play-btn').innerHTML = '\u25B6 Play'; return; }
+        document.getElementById('replay-play-btn').innerHTML = '\u23F8 Pause';
+        var body = document.getElementById('replay-body');
+        if (_replayIdx === 0) body.innerHTML = '';
+        var speedSlider = document.getElementById('replay-speed'), speedLabel = document.getElementById('replay-speed-label'), timeLabel = document.getElementById('replay-time');
+        function tick() {
+            if (_replayIdx >= _replayEvents.length) { clearInterval(_replayTimer); _replayTimer = null; document.getElementById('replay-play-btn').innerHTML = '\u25B6 Replay'; _replayIdx = 0; return; }
+            var ev = _replayEvents[_replayIdx++], topic = ev.topic || '', data = ev.data || {}, ts = ev.timestamp || '', time = ts ? ts.slice(11,19) : '';
+            var c = classifyEvent(topic, data);
+            var el = document.createElement('div'); el.className = 'sf-event' + (c.cls ? ' '+c.cls : '');
+            el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">'+esc(time)+'</span><span style="color:'+c.color+'">'+esc(c.text)+'</span>';
+            body.appendChild(el); body.scrollTop = body.scrollHeight;
+            if (timeLabel) timeLabel.textContent = time;
+            var spd = speedMap[parseInt(speedSlider.value)] || 720; if (speedLabel) speedLabel.textContent = spd + 'x';
+        }
+        var spd = parseInt(speedSlider.value), ms = Math.max(50, 500/spd);
+        _replayTimer = setInterval(tick, ms);
+        speedSlider.oninput = function() { var s=speedMap[parseInt(this.value)]||720; speedLabel.textContent=s+'x'; if(_replayTimer){clearInterval(_replayTimer);_replayTimer=setInterval(tick,Math.max(50,500/parseInt(this.value)));} };
+    }
+    window.openReplay = openReplay;
+    window.toggleReplay = toggleReplay;
+} else {
+    // Only run wizard if NOT in spectator mode
+    (async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();
+}
 refreshDesktop();
 updateNudgeBanner();
 setInterval(updateNudgeBanner, 30000);
