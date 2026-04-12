@@ -3876,15 +3876,20 @@ function renderDesktop(goals, resources, daemons, learned, services) {
     const welcome = document.getElementById('welcome-state');
 
     if (!goals.length && !learned.length) {
+        // In spectator mode, keep the spectator welcome — don't overwrite it
+        if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
+            const sw = document.getElementById('spectator-welcome');
+            if (sw) sw.style.display = '';
+            return;
+        }
         desktop.innerHTML = '<div class="welcome" id="welcome-state"><h2>What do you want me to handle?</h2><p>Type a command below. Try "run sales for my startup" or "set up monitoring"</p></div>';
-        // Keep chips visible on welcome screen
         const chips = document.getElementById('prompt-chips');
         if (chips) chips.style.display = '';
         return;
     }
 
-    // Hide welcome but keep chips visible when conversation panel is open
-    const welcomeEl = document.getElementById('welcome-state');
+    // Hide welcome (or spectator-welcome) when goals exist
+    const welcomeEl = document.getElementById('welcome-state') || document.getElementById('spectator-welcome');
     if (welcomeEl) welcomeEl.style.display = 'none';
 
     // Sort: active goals first, then completed (user cares about what's happening NOW)
@@ -5974,18 +5979,20 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         if (sfBody.children.length === 1 && sfBody.children[0].textContent.includes('Waiting')) sfBody.innerHTML = '';
         const time = ts ? ts.slice(11, 19) : new Date().toISOString().slice(11, 19);
         let icon = '', text = '', color = 'var(--text2)';
-        if (topic.includes('phase_completed') && data.status === 'done') { icon = '\\u2713'; text = (data.phase || '').replace(/_/g, ' '); color = 'var(--green)'; }
-        else if (topic.includes('phase_completed')) { icon = '\\u2717'; text = 'FAILED: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--red)'; }
-        else if (topic.includes('phase_retrying')) { icon = '\\u21BB'; text = 'RETRY: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--yellow)'; }
-        else if (topic.includes('goal_created')) { icon = '\\u25B6'; text = (data.description || '').slice(0, 50); color = 'var(--purple)'; }
-        else if (topic.includes('goal_completed')) { icon = '\\u2713'; text = 'DONE: ' + (data.description || '').slice(0, 40); color = 'var(--green)'; }
-        else if (topic.includes('evolution') || topic.includes('demand')) { icon = '\\u2B50'; text = topic.split('.').pop().replace(/_/g, ' '); color = 'var(--accent)'; }
-        else if (topic.includes('capability_gap')) { icon = '\\u26A0'; text = 'GAP: ' + (data.tool || data.detail || ''); color = 'var(--yellow)'; }
-        else if (topic.includes('tool_call')) { icon = '\\u1F527'; text = data.tool || ''; color = 'var(--cyan)'; }
-        else if (topic.includes('sub_agent')) { icon = '\\u1F680'; text = data.name || ''; color = 'var(--cyan)'; }
-        else if (topic.includes('skill') || topic.includes('learned')) { icon = '\\u1F4A1'; text = 'Learned: ' + (data.name || topic.split('.').pop()); color = 'var(--green)'; }
-        else { icon = '\\u2022'; text = topic.split('.').slice(-2).join(' ').replace(/_/g, ' '); }
+        // Filter noise FIRST — before building the event
         if (topic.includes('network.dns') || topic.includes('disk.') || topic.includes('quality.') || topic.includes('codebase.') || topic.includes('network.self')) return;
+        if (topic.includes('cleanup') || topic.includes('gc.') || topic.includes('reality_check')) return;
+        if (topic.includes('phase_completed') && data.status === 'done') { icon = '\u2713'; text = (data.phase || '').replace(/_/g, ' '); color = 'var(--green)'; }
+        else if (topic.includes('phase_completed')) { icon = '\u2717'; text = 'FAILED: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--red)'; }
+        else if (topic.includes('phase_retrying')) { icon = '\u21BB'; text = 'RETRY: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--yellow)'; }
+        else if (topic.includes('goal_created')) { icon = '\u25B6'; text = (data.description || '').slice(0, 50); color = 'var(--purple)'; }
+        else if (topic.includes('goal_completed')) { icon = '\u2713'; text = 'DONE: ' + (data.description || '').slice(0, 40); color = 'var(--green)'; }
+        else if (topic.includes('evolution') || topic.includes('demand')) { icon = '\u2B50'; text = topic.split('.').pop().replace(/_/g, ' '); color = 'var(--accent)'; }
+        else if (topic.includes('capability_gap')) { icon = '\u26A0'; text = 'GAP: ' + (data.tool || data.detail || ''); color = 'var(--yellow)'; }
+        else if (topic.includes('tool_call')) { icon = '\uD83D\uDD27'; text = data.tool || ''; color = 'var(--cyan)'; }
+        else if (topic.includes('sub_agent')) { icon = '\uD83D\uDE80'; text = data.name || ''; color = 'var(--cyan)'; }
+        else if (topic.includes('skill') || topic.includes('learned')) { icon = '\uD83D\uDCA1'; text = 'Learned: ' + (data.name || topic.split('.').pop()); color = 'var(--green)'; }
+        else { icon = '\u2022'; text = topic.split('.').slice(-2).join(' ').replace(/_/g, ' '); }
         const el = document.createElement('div');
         el.className = 'sf-event';
         el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">' + esc(time) + '</span><span style="color:' + color + '">' + esc(icon + ' ' + text) + '</span>';
