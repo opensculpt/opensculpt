@@ -686,42 +686,65 @@ created_at: {created_at}
 
 
 async def extract_service_card(llm: Any, goal: dict, phase: dict) -> ServiceCard | None:
-    """Ask LLM to extract a service card from a completed phase."""
-    try:
-        from agos.llm.base import LLMMessage
-    except ImportError:
-        return None
+    """Extract a service card from phase data. No LLM needed — port, health check,
+    and start command are all in the phase dict already."""
 
-    prompt = SERVICE_CARD_EXTRACTION_PROMPT.format(
-        goal_description=goal.get("description", ""),
-        phase_name=phase.get("name", ""),
-        phase_result=(phase.get("result", "") or "")[:2000],
-        verify=phase.get("verify", ""),
-        creates_daemon=phase.get("creates_daemon") or phase.get("creates_hand", ""),
-        goal_id=goal.get("id", ""),
-        created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    )
+    # Parse port from verify command, exec commands, or creates_daemon description
+    port = 0
+    _port_re = re.compile(r'(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})')
+    for field in [phase.get("verify", ""), phase.get("creates_daemon", ""),
+                  " ".join(phase.get("exec", [])), phase.get("result", "") or ""]:
+        m = _port_re.search(field)
+        if m:
+            port = int(m.group(1))
+            break
+    # Fallback: look for "port NNNN" or "port=NNNN"
+    if not port:
+        m = re.search(r'port[=\s]+(\d{4,5})', " ".join([
+            phase.get("creates_daemon", ""), phase.get("verify", ""),
+            " ".join(phase.get("exec", []))
+        ]), re.IGNORECASE)
+        if m:
+            port = int(m.group(1))
 
-    try:
-        resp = await llm.complete(
-            messages=[LLMMessage(role="user", content=prompt)],
-            max_tokens=800,
-        )
-        card_text = (resp.content or "").strip()
-        if not card_text or "---" not in card_text:
-            _logger.warning("LLM returned invalid service card format")
-            return None
+    # Start command from exec list (last command that looks like a server start)
+    start_command = ""
+    for cmd in reversed(phase.get("exec", [])):
+        if any(kw in cmd.lower() for kw in ["nohup", "start", "python", "node", "uvicorn", "gunicorn"]):
+            start_command = cmd
+            break
 
-        # Save to disk
-        safe_name = re.sub(r'[^a-z0-9_]', '_', phase.get("name", "service").lower())
-        card_path = SERVICES_DIR / f"{goal.get('id', 'unknown')}_{safe_name}.md"
-        card_path.parent.mkdir(parents=True, exist_ok=True)
-        card_path.write_text(card_text, encoding="utf-8")
+    # Health check from verify command
+    health_check = phase.get("verify", "")
 
-        card = ServiceCard.from_file(card_path)
-        _logger.info("Extracted service card: %s (port %d)", card.name, card.port)
-        return card
+    # Name from creates_daemon or phase name
+    daemon_desc = phase.get("creates_daemon") or phase.get("creates_hand", "")
+    name_parts = daemon_desc.split(":") if ":" in daemon_desc else [daemon_desc]
+    name = name_parts[0].strip() or phase.get("name", "service")
 
-    except Exception as e:
-        _logger.error("Failed to extract service card: %s", e)
-        return None
+    # Build and save card
+    safe_name = re.sub(r'[^a-z0-9_]', '_', phase.get("name", "service").lower())
+    card_path = SERVICES_DIR / f"{goal.get('id', 'unknown')}_{safe_name}.md"
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+
+    card_text = f"""---
+name: {name}
+goal_id: {goal.get("id", "")}
+type: flask_app
+port: {port}
+health_check: {health_check}
+start_command: {start_command}
+status: starting
+created_at: {time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+---
+
+# {name}
+
+Goal: {goal.get("description", "")}
+Phase: {phase.get("name", "")}
+"""
+    card_path.write_text(card_text, encoding="utf-8")
+
+    card = ServiceCard.from_file(card_path)
+    _logger.info("Extracted service card: %s (port %d, start=%s)", card.name, card.port, start_command[:60])
+    return card
