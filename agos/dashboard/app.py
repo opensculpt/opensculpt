@@ -5903,19 +5903,204 @@ async function updateNudgeBanner() {
 /* ═══════════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════════ */
-// ── Spectator mode: hide command bar, show banner, skip wizard ──
+// ── Spectator mode: hero welcome, prominent activity feed, replay button ──
 if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
-    // Hide command bar
+    // Hide command bar + prompt chips
     const cmdBar = document.getElementById('command-bar');
     if (cmdBar) cmdBar.style.display = 'none';
-    // Add spectator banner
-    const banner = document.createElement('div');
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,rgba(139,92,246,0.15),rgba(59,130,246,0.15));border-bottom:1px solid rgba(139,92,246,0.3);padding:6px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.8);backdrop-filter:blur(10px)';
-    banner.innerHTML = '&#x1F50D; You\\\'re watching <strong>OpenSculpt</strong> — a self-evolving agentic OS running autonomously &middot; <a href="https://github.com/opensculpt/opensculpt" target="_blank" style="color:var(--purple);text-decoration:none">GitHub</a>';
-    document.body.prepend(banner);
-    // Shift topbar down
-    const topbar = document.querySelector('.topbar');
-    if (topbar) topbar.style.top = '29px';
+
+    // Inject spectator CSS — split layout with prominent activity feed
+    const spectatorStyle = document.createElement('style');
+    spectatorStyle.textContent = `
+        .desktop { grid-template-columns: 1fr 1fr !important; gap: 16px !important; top: 32px !important; }
+        #spectator-feed { position:fixed; top:32px; right:0; width:38%; height:calc(100vh - 32px); background:rgba(7,8,12,0.98); border-left:1px solid var(--border); z-index:10; overflow-y:auto; padding:0; font-family:'JetBrains Mono',monospace; }
+        #spectator-feed .sf-header { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:rgba(7,8,12,0.98); z-index:1; }
+        #spectator-feed .sf-header h3 { font-size:13px; font-weight:600; color:var(--text); margin:0; }
+        #spectator-feed .sf-body { padding:8px 12px; }
+        #spectator-feed .sf-event { font-size:11px; padding:4px 0; border-bottom:1px solid rgba(35,45,63,0.15); display:flex; gap:8px; align-items:baseline; animation: sfFadeIn 0.3s ease; }
+        @keyframes sfFadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+        .desktop { right:38% !important; }
+        .topbar { right:38% !important; }
+        #spectator-welcome { grid-column:1/-1; text-align:center; padding:40px 20px 20px; }
+        #spectator-welcome h2 { font-size:26px; font-weight:800; background:linear-gradient(135deg,var(--accent),var(--purple)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:8px; }
+        #spectator-welcome p { color:var(--text2); font-size:13px; max-width:500px; margin:0 auto 16px; }
+        #spectator-welcome .sw-stats { display:flex; gap:24px; justify-content:center; margin:16px 0; }
+        #spectator-welcome .sw-stat { text-align:center; }
+        #spectator-welcome .sw-stat .num { font-size:22px; font-weight:700; color:var(--text); font-family:'Space Grotesk',sans-serif; }
+        #spectator-welcome .sw-stat .label { font-size:10px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; }
+        #spectator-welcome .sw-links { margin-top:12px; display:flex; gap:12px; justify-content:center; }
+        #spectator-welcome .sw-links a { font-size:12px; color:var(--purple); text-decoration:none; padding:6px 14px; border:1px solid rgba(139,92,246,0.3); border-radius:8px; transition:all 0.2s; }
+        #spectator-welcome .sw-links a:hover { background:rgba(139,92,246,0.1); }
+        .replay-btn { background:none; border:1px solid var(--border); color:var(--text2); border-radius:6px; padding:4px 10px; font-size:11px; cursor:pointer; transition:all 0.2s; }
+        .replay-btn:hover { border-color:var(--purple); color:var(--purple); }
+        #replay-modal { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.7); display:none; justify-content:center; align-items:center; }
+        #replay-modal .rm-inner { background:var(--bg2); border:1px solid var(--border); border-radius:14px; width:90%; max-width:700px; max-height:80vh; overflow:hidden; display:flex; flex-direction:column; }
+        #replay-modal .rm-header { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+        #replay-modal .rm-body { flex:1; overflow-y:auto; padding:12px 18px; font-family:'JetBrains Mono',monospace; font-size:11px; }
+        #replay-modal .rm-controls { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:12px; align-items:center; }
+        #replay-modal .rm-controls button { background:none; border:1px solid var(--border); color:var(--text); border-radius:6px; padding:4px 12px; font-size:12px; cursor:pointer; }
+        #replay-modal .rm-controls button:hover { border-color:var(--purple); }
+        #replay-modal .rm-controls input[type=range] { flex:1; }
+    `;
+    document.head.appendChild(spectatorStyle);
+
+    // Replace welcome state with spectator hero
+    const welcome = document.getElementById('welcome-state');
+    if (welcome) {
+        welcome.id = 'spectator-welcome';
+        welcome.innerHTML = '<h2>OpenSculpt</h2><p>You\\\'re watching a self-evolving agentic OS. It deploys apps, learns from failures, and evolves itself — all autonomously.</p><div class="sw-stats"><div class="sw-stat"><div class="num" id="sw-goals">0</div><div class="label">Goals</div></div><div class="sw-stat"><div class="num" id="sw-services">0</div><div class="label">Services</div></div><div class="sw-stat"><div class="num" id="sw-skills">0</div><div class="label">Skills</div></div><div class="sw-stat"><div class="num" id="sw-demands">0</div><div class="label">Demands</div></div></div><div class="sw-links"><a href="https://github.com/opensculpt/opensculpt" target="_blank">&#x2B50; GitHub</a><a href="#" onclick="openReplay();return false">&#x23F0; Replay 24h</a></div>';
+    }
+
+    // Create live activity feed panel (right side)
+    const feedPanel = document.createElement('div');
+    feedPanel.id = 'spectator-feed';
+    feedPanel.innerHTML = '<div class="sf-header"><h3>&#x26A1; Live Activity</h3><button class="replay-btn" onclick="openReplay()">&#x23F0; Replay</button></div><div class="sf-body" id="sf-body"><div style="color:var(--text2);font-size:11px;text-align:center;padding:20px">Waiting for events...</div></div>';
+    document.body.appendChild(feedPanel);
+
+    // Create replay modal
+    const replayModal = document.createElement('div');
+    replayModal.id = 'replay-modal';
+    replayModal.onclick = function(e) { if (e.target === replayModal) replayModal.style.display = 'none'; };
+    replayModal.innerHTML = '<div class="rm-inner"><div class="rm-header"><span style="font-weight:600;color:var(--text)">&#x23F0; Evolution Replay — Last 24 Hours</span><button onclick="document.getElementById(\\\'replay-modal\\\').style.display=\\\'none\\\'" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer">&times;</button></div><div class="rm-body" id="replay-body"></div><div class="rm-controls"><button id="replay-play-btn" onclick="toggleReplay()">&#x25B6; Play</button><input type="range" id="replay-speed" min="1" max="5" value="3" title="Speed"><span id="replay-speed-label" style="font-size:10px;color:var(--text2);min-width:40px">720x</span><span id="replay-time" style="font-size:10px;color:var(--text2);margin-left:auto">--:--</span></div></div>';
+    document.body.appendChild(replayModal);
+
+    // Hook into WebSocket events — mirror to spectator feed
+    const origAddActivity = window.addActivityEvent || addActivityEvent;
+    window.addActivityEvent = function(topic, data, ts) {
+        origAddActivity(topic, data, ts);
+        // Also add to spectator feed
+        const sfBody = document.getElementById('sf-body');
+        if (!sfBody) return;
+        if (sfBody.children.length === 1 && sfBody.children[0].textContent.includes('Waiting')) sfBody.innerHTML = '';
+        const time = ts ? ts.slice(11, 19) : new Date().toISOString().slice(11, 19);
+        let icon = '', text = '', color = 'var(--text2)';
+        if (topic.includes('phase_completed') && data.status === 'done') { icon = '\\u2713'; text = (data.phase || '').replace(/_/g, ' '); color = 'var(--green)'; }
+        else if (topic.includes('phase_completed')) { icon = '\\u2717'; text = 'FAILED: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--red)'; }
+        else if (topic.includes('phase_retrying')) { icon = '\\u21BB'; text = 'RETRY: ' + (data.phase || '').replace(/_/g, ' '); color = 'var(--yellow)'; }
+        else if (topic.includes('goal_created')) { icon = '\\u25B6'; text = (data.description || '').slice(0, 50); color = 'var(--purple)'; }
+        else if (topic.includes('goal_completed')) { icon = '\\u2713'; text = 'DONE: ' + (data.description || '').slice(0, 40); color = 'var(--green)'; }
+        else if (topic.includes('evolution') || topic.includes('demand')) { icon = '\\u2B50'; text = topic.split('.').pop().replace(/_/g, ' '); color = 'var(--accent)'; }
+        else if (topic.includes('capability_gap')) { icon = '\\u26A0'; text = 'GAP: ' + (data.tool || data.detail || ''); color = 'var(--yellow)'; }
+        else if (topic.includes('tool_call')) { icon = '\\u1F527'; text = data.tool || ''; color = 'var(--cyan)'; }
+        else if (topic.includes('sub_agent')) { icon = '\\u1F680'; text = data.name || ''; color = 'var(--cyan)'; }
+        else if (topic.includes('skill') || topic.includes('learned')) { icon = '\\u1F4A1'; text = 'Learned: ' + (data.name || topic.split('.').pop()); color = 'var(--green)'; }
+        else { icon = '\\u2022'; text = topic.split('.').slice(-2).join(' ').replace(/_/g, ' '); }
+        if (topic.includes('network.dns') || topic.includes('disk.') || topic.includes('quality.') || topic.includes('codebase.') || topic.includes('network.self')) return;
+        const el = document.createElement('div');
+        el.className = 'sf-event';
+        el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">' + esc(time) + '</span><span style="color:' + color + '">' + esc(icon + ' ' + text) + '</span>';
+        sfBody.prepend(el);
+        while (sfBody.children.length > 100) sfBody.lastChild.remove();
+    };
+
+    // Update spectator stats periodically
+    async function updateSpectatorStats() {
+        const s = await fetchJSON('/api/status');
+        if (!s) return;
+        const goalsEl = document.getElementById('sw-goals');
+        const servEl = document.getElementById('sw-services');
+        const skillsEl = document.getElementById('sw-skills');
+        const demEl = document.getElementById('sw-demands');
+        if (goalsEl) goalsEl.textContent = (s.session_requests || 0);
+        if (servEl) servEl.textContent = (s.resources_active || 0);
+        if (demEl) demEl.textContent = (s.demand_signals || 0);
+        // Count skills from disk
+        try {
+            const goals = await fetchJSON('/api/goals');
+            if (goals && goals.goals) {
+                let sk = 0;
+                goals.goals.forEach(g => { sk += (g.skills_learned || []).length; });
+                if (skillsEl) skillsEl.textContent = sk;
+                if (goalsEl) goalsEl.textContent = goals.goals.length;
+            }
+        } catch(e) {}
+    }
+    updateSpectatorStats();
+    setInterval(updateSpectatorStats, 5000);
+
+    // Replay functionality
+    let _replayEvents = [];
+    let _replayTimer = null;
+    let _replayIdx = 0;
+    const speedMap = {1: 120, 2: 360, 3: 720, 4: 1440, 5: 2880};
+
+    async function openReplay() {
+        const modal = document.getElementById('replay-modal');
+        modal.style.display = 'flex';
+        const body = document.getElementById('replay-body');
+        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">Loading events...</div>';
+        // Fetch events from EventBus history
+        const events = await fetchJSON('/api/events?limit=500&topic=*');
+        if (!events || !events.length) {
+            body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">No events recorded yet. Check back soon.</div>';
+            return;
+        }
+        _replayEvents = events.reverse(); // chronological order
+        _replayIdx = 0;
+        body.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center">' + events.length + ' events ready. Press Play.</div>';
+        document.getElementById('replay-play-btn').innerHTML = '&#x25B6; Play';
+    }
+
+    function toggleReplay() {
+        if (_replayTimer) {
+            clearInterval(_replayTimer);
+            _replayTimer = null;
+            document.getElementById('replay-play-btn').innerHTML = '&#x25B6; Play';
+            return;
+        }
+        document.getElementById('replay-play-btn').innerHTML = '&#x23F8; Pause';
+        const body = document.getElementById('replay-body');
+        if (_replayIdx === 0) body.innerHTML = '';
+        const speedSlider = document.getElementById('replay-speed');
+        const speedLabel = document.getElementById('replay-speed-label');
+        const timeLabel = document.getElementById('replay-time');
+
+        function tick() {
+            if (_replayIdx >= _replayEvents.length) {
+                clearInterval(_replayTimer);
+                _replayTimer = null;
+                document.getElementById('replay-play-btn').innerHTML = '&#x25B6; Replay';
+                _replayIdx = 0;
+                return;
+            }
+            const ev = _replayEvents[_replayIdx++];
+            const topic = ev.topic || '';
+            const data = ev.data || {};
+            const ts = ev.timestamp || '';
+            const time = ts ? ts.slice(11, 19) : '';
+            let color = 'var(--text2)', text = topic.split('.').slice(-2).join(' ').replace(/_/g, ' ');
+            if (topic.includes('phase_completed') && data.status === 'done') { color = 'var(--green)'; text = '\\u2713 ' + (data.phase || ''); }
+            else if (topic.includes('phase_completed')) { color = 'var(--red)'; text = '\\u2717 FAILED: ' + (data.phase || ''); }
+            else if (topic.includes('goal_created')) { color = 'var(--purple)'; text = '\\u25B6 GOAL: ' + (data.description || '').slice(0, 50); }
+            else if (topic.includes('goal_completed')) { color = 'var(--green)'; text = '\\u2713 DONE: ' + (data.description || '').slice(0, 40); }
+            else if (topic.includes('evolution') || topic.includes('demand')) { color = 'var(--accent)'; text = '\\u2B50 ' + topic.split('.').pop().replace(/_/g, ' '); }
+            else if (topic.includes('capability_gap')) { color = 'var(--yellow)'; text = '\\u26A0 GAP: ' + (data.tool || data.detail || ''); }
+            const el = document.createElement('div');
+            el.style.cssText = 'font-size:11px;padding:3px 0;display:flex;gap:8px;animation:sfFadeIn 0.2s ease';
+            el.innerHTML = '<span style="color:var(--text-dim);min-width:55px">' + esc(time) + '</span><span style="color:' + color + '">' + esc(text) + '</span>';
+            body.appendChild(el);
+            body.scrollTop = body.scrollHeight;
+            if (timeLabel) timeLabel.textContent = time;
+            // Update speed display
+            const spd = speedMap[parseInt(speedSlider.value)] || 720;
+            if (speedLabel) speedLabel.textContent = spd + 'x';
+        }
+
+        // Speed: slider 1-5 maps to event interval
+        const spd = parseInt(speedSlider.value);
+        const intervalMs = Math.max(50, 500 / spd);
+        _replayTimer = setInterval(tick, intervalMs);
+        speedSlider.oninput = function() {
+            const s = speedMap[parseInt(this.value)] || 720;
+            speedLabel.textContent = s + 'x';
+            if (_replayTimer) {
+                clearInterval(_replayTimer);
+                _replayTimer = setInterval(tick, Math.max(50, 500 / parseInt(this.value)));
+            }
+        };
+    }
+    window.openReplay = openReplay;
+    window.toggleReplay = toggleReplay;
 } else {
     // Only run wizard if NOT in spectator mode
     (async () => { try { await wizardCheck(); } catch(e) { console.error('Wizard error:', e); } })();

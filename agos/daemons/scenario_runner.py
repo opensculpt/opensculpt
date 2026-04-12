@@ -21,11 +21,16 @@ SCENARIOS = [
     "create a Python script at /tmp/file_watcher.py that monitors /tmp for new files and logs changes",
     "set up a simple key-value store REST API with FastAPI on port 5060",
     "analyze installed Python packages and report any with known security issues",
+    "create a simple SQLite-backed TODO API with FastAPI on port 5070",
+    "write a system monitoring dashboard script that outputs HTML to /tmp/sysmon.html",
+    "scan the filesystem for files larger than 10MB and report them",
+    "create a background job that checks internet connectivity every 30 seconds and logs results",
+    "build a simple URL shortener API with FastAPI on port 5080",
 ]
 
-INTERVAL = 1800  # 30 minutes between scenarios
+INTERVAL = 300  # 5 minutes between scenarios
 MAX_ACTIVE_GOALS = 2  # Don't pile up goals
-GOAL_TTL = 7200  # Clean up goals older than 2 hours
+GOAL_TTL = 600  # Clean up goals older than 10 min
 
 
 class ScenarioRunner:
@@ -36,6 +41,8 @@ class ScenarioRunner:
         self._running = False
         self._task: asyncio.Task | None = None
         self._scenario_idx = 0
+        # Shuffle on init so repeat visitors see different order
+        random.shuffle(SCENARIOS)
 
     async def start(self) -> None:
         if self._running:
@@ -50,8 +57,8 @@ class ScenarioRunner:
             self._task.cancel()
 
     async def _loop(self) -> None:
-        # Wait 60s on boot before first scenario (let OS stabilize)
-        await asyncio.sleep(60)
+        # Wait 30s on boot before first scenario (let OS stabilize)
+        await asyncio.sleep(30)
         while self._running:
             try:
                 await self._run_next()
@@ -79,7 +86,7 @@ class ScenarioRunner:
         except Exception:
             pass
 
-        # Pick next scenario (round-robin with shuffle)
+        # Pick next scenario (round-robin through shuffled list)
         scenario = SCENARIOS[self._scenario_idx % len(SCENARIOS)]
         self._scenario_idx += 1
 
