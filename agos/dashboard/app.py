@@ -4607,7 +4607,7 @@ async function runCommand() {
         }
     }
     let liveWs;
-    try { liveWs = new WebSocket('ws://'+location.host+'/ws/events'); liveWs.onmessage = onLiveEvent; } catch(e) {}
+    try { liveWs = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/events'); liveWs.onmessage = onLiveEvent; } catch(e) {}
 
     try {
         const ctrl = new AbortController();
@@ -5004,7 +5004,7 @@ async function refreshDesktop() {
    ═══════════════════════════════════════════════════════════════════ */
 
 try {
-    const ws = new WebSocket('ws://'+location.host+'/ws/events');
+    const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/events');
     ws.onmessage = e => {
         const ev = JSON.parse(e.data);
         eventCount++;
