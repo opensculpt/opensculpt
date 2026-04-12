@@ -193,13 +193,18 @@ async def main() -> None:
                     return
         except Exception:
             pass
-        # Fallback: Anthropic env var
-        if llm is None and settings.anthropic_api_key:
-            from agos.llm.anthropic import AnthropicProvider
-            llm = AnthropicProvider(
-                api_key=settings.anthropic_api_key,
-                model=settings.default_model,
-            )
+        # Fallback: auto-detect provider from API key prefix
+        if llm is None and settings.llm_api_key:
+            detected = _detect_provider_from_key(settings.llm_api_key)
+            from agos.llm.providers import ALL_PROVIDERS
+            provider_name = detected or "anthropic"
+            cls = ALL_PROVIDERS.get(provider_name)
+            if cls:
+                try:
+                    llm = cls(api_key=settings.llm_api_key, model=settings.default_model)
+                    _logger.info("Fallback LLM: %s (auto-detected from key prefix)", provider_name)
+                except Exception as e:
+                    _logger.warning("Fallback LLM init failed for %s: %s", provider_name, e)
 
     try:
         await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, _init_llm), timeout=30)
