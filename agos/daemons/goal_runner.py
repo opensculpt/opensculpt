@@ -122,14 +122,13 @@ class GoalRunner(Daemon):
             description: What the user wants (e.g., "Handle sales for my startup")
             category: Optional category (sales, support, devops, etc.)
         """
-        # Dedup: don't create if a similar active goal exists
+        # Dedup: don't create if a similar goal exists in any state
         existing = self._load_goals()
         desc_key = description[:50].lower().strip()
         for g in existing:
-            if g.get("status") in ("active", "operating", "planning"):
-                if g.get("description", "")[:50].lower().strip() == desc_key:
-                    _logger.info("Goal dedup: reusing existing goal %s", g["id"])
-                    return g
+            if g.get("description", "")[:50].lower().strip() == desc_key:
+                _logger.info("Goal dedup: reusing existing goal %s (status=%s)", g["id"], g.get("status"))
+                return g
 
         goal_id = f"goal_{int(time.time())}_{hash(description) % 10000}"
         goal = {

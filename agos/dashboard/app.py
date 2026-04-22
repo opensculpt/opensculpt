@@ -5988,6 +5988,23 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
         }
         #spectator-welcome .sw-links a:hover { background:rgba(232,164,74,0.1); border-color:rgba(232,164,74,0.5); }
 
+        /* ── STORIES — completed goal cards ── */
+        .sw-stories { margin:28px auto 0; max-width:720px; text-align:left; }
+        .sw-stories h3 { font-size:12px; color:var(--text2); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:14px; text-align:center; }
+        .sw-stories-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
+        .story-card {
+            background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);
+            border-radius:10px; padding:14px; transition:all 0.2s;
+        }
+        .story-card:hover { border-color:rgba(74,222,128,0.3); background:rgba(74,222,128,0.03); }
+        .story-card .sc-status { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:6px; }
+        .story-card .sc-status.complete { color:var(--green); }
+        .story-card .sc-status.active { color:var(--accent); }
+        .story-card .sc-status.failed { color:var(--red); }
+        .story-card .sc-title { font-size:13px; color:var(--text); line-height:1.4; margin-bottom:8px; }
+        .story-card .sc-meta { font-size:10px; color:var(--text-dim); display:flex; gap:12px; }
+        .story-card .sc-meta span { display:flex; align-items:center; gap:3px; }
+
         /* ── 6. FEED PANEL — observatory terminal ── */
         #spectator-feed {
             position:fixed; top:0; right:0; width:38%; height:100vh;
@@ -6201,6 +6218,53 @@ if (typeof _SPECTATOR_MODE !== 'undefined' && _SPECTATOR_MODE) {
     }
     updateSpectatorStats();
     setInterval(updateSpectatorStats, 5000);
+
+    // ── STORIES — completed goals as cards ──
+    async function updateStories() {
+        var goals = await fetchJSON('/api/goals');
+        if (!goals || !goals.goals) return;
+        var sw = document.getElementById('spectator-welcome');
+        if (!sw) return;
+        var container = document.getElementById('sw-stories');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'sw-stories';
+            container.className = 'sw-stories';
+            sw.appendChild(container);
+        }
+        // Dedup by description (first 50 chars), keep best status
+        var seen = {}, unique = [];
+        goals.goals.forEach(function(g) {
+            var key = (g.description || '').slice(0, 50).toLowerCase();
+            if (!seen[key] || g.status === 'complete') { seen[key] = g; }
+        });
+        Object.values(seen).forEach(function(g) { unique.push(g); });
+        // Sort: complete first, then active, then rest
+        var order = {complete:0, active:1, failed:2};
+        unique.sort(function(a, b) { return (order[a.status] || 3) - (order[b.status] || 3); });
+        // Only show top-level goals (ones with phases)
+        unique = unique.filter(function(g) { return g.phases && g.phases.length > 0; });
+        if (unique.length === 0) return;
+        var html = '<h3>Stories</h3><div class="sw-stories-grid">';
+        unique.slice(0, 12).forEach(function(g) {
+            var phases = g.phases || [];
+            var done = phases.filter(function(p) { return p.status === 'done'; }).length;
+            var tokens = g._total_tokens || 0;
+            var tokenStr = tokens > 1000 ? Math.round(tokens / 1000) + 'K' : tokens;
+            var costStr = g._total_cost ? '$' + g._total_cost.toFixed(3) : '';
+            var statusClass = g.status === 'complete' ? 'complete' : g.status === 'active' ? 'active' : 'failed';
+            html += '<div class="story-card"><div class="sc-status ' + statusClass + '">' + esc(g.status) + '</div>';
+            html += '<div class="sc-title">' + esc(g.description || '?') + '</div>';
+            html += '<div class="sc-meta"><span>' + done + '/' + phases.length + ' phases</span>';
+            if (tokenStr) html += '<span>' + tokenStr + ' tokens</span>';
+            if (costStr) html += '<span>' + costStr + '</span>';
+            html += '</div></div>';
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+    updateStories();
+    setInterval(updateStories, 15000);
 
     // ── ALWAYS-MOVING HEARTBEAT ──
     setInterval(function() {
