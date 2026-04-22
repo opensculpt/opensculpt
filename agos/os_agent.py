@@ -933,7 +933,10 @@ class OSAgent:
         if goal_runner.status != DaemonStatus.RUNNING:
             await self._daemon_manager.start_daemon("goal_runner", {})
 
-        result = await goal_runner.create_goal(goal, category)
+        try:
+            result = await goal_runner.create_goal(goal, category)
+        except Exception as e:
+            return f"Error creating goal: {type(e).__name__}: {e}"
         phases = result.get("phases", [])
         phase_names = [p.get("name", "?") for p in phases]
         return (
@@ -951,16 +954,22 @@ class OSAgent:
         if not goal_runner:
             return "No active goals"
 
-        goals = goal_runner.get_goals()
+        try:
+            goals = goal_runner.get_goals()
+        except Exception as e:
+            return f"Error loading goals: {type(e).__name__}: {e}"
         if not goals:
             return "No goals set. Use set_goal to create one."
 
         lines = []
         for g in goals:
-            lines.append(f"[{g['status'].upper()}] {g['description'][:60]}")
+            status = g.get("status", "unknown")
+            desc = g.get("description", g.get("goal", "?"))
+            lines.append(f"[{status.upper()}] {desc[:60]}")
             for p in g.get("phases", []):
-                status_icon = {"done": "✓", "failed": "✗", "pending": "○"}.get(p["status"], "?")
-                lines.append(f"  {status_icon} {p['name']}: {p['status']}")
+                pstatus = p.get("status", "unknown")
+                status_icon = {"done": "✓", "failed": "✗", "pending": "○"}.get(pstatus, "?")
+                lines.append(f"  {status_icon} {p.get('name', '?')}: {pstatus}")
                 if p.get("result"):
                     lines.append(f"    → {p['result'][:80]}")
             if g.get("daemons_created"):
